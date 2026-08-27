@@ -1,13 +1,14 @@
 {
   "name": "navegador-roku",
   "version": "1.0.0",
-  "description": "Navegador Roku",
+  "private": true,
+  "description": "Navegador Roku com Playwright e Express",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
     "express": "^4.21.2",
-    "playwright": "^1.49.1"
+    "playwright": "^1.52.0"
   }
 }

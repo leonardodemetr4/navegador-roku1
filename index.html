@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Navegador Roku</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Navegador <strong>Roku</strong></div>
+    <div class="status"><span></span> Servidor online</div>
+  </header>
+
+  <main class="shell">
+    <section class="hero">
+      <h1>Navegador Roku</h1>
+      <p>Digite um endereço para abrir uma página através do navegador.</p>
+
+      <form id="browseForm" class="search">
+        <input
+          id="url"
+          name="url"
+          type="url"
+          inputmode="url"
+          autocomplete="url"
+          placeholder="https://example.com"
+          value="https://example.com"
+          required
+        >
+        <button type="submit">Abrir</button>
+      </form>
+
+      <div class="quick">
+        <button data-url="https://example.com">Example</button>
+        <button data-url="https://www.wikipedia.org">Wikipedia</button>
+      </div>
+
+      <p id="message" class="message"></p>
+    </section>
+
+    <section class="info">
+      <div>
+        <h2>Como usar</h2>
+        <p>Digite uma URL completa, toque em <b>Abrir</b> e o servidor vai carregar a página com Chromium + Playwright.</p>
+      </div>
+      <a href="/health" target="_blank">Verificar servidor</a>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
