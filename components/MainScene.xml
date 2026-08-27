@@ -1,1 +1,56 @@
+<?xml version="1.0" encoding="utf-8" ?>
 
+<component name="MainScene" extends="Scene">
+
+  <children>
+
+    <Rectangle
+      id="background"
+      width="1280"
+      height="720"
+      color="0x101114FF" />
+
+    <Label
+      id="title"
+      text="Navegador"
+      translation="[55,28]"
+      color="0xFFFFFFFF"
+      font="font:LargeBoldSystemFont" />
+
+    <Rectangle
+      id="addressBar"
+      translation="[45,82]"
+      width="1190"
+      height="58"
+      color="0x202328FF" />
+
+    <Label
+      id="address"
+      text="https://www.google.com"
+      translation="[70,99]"
+      width="1130"
+      height="34"
+      color="0xFFFFFFFF"
+      font="font:MediumSystemFont" />
+
+    <Poster
+      id="siteView"
+      translation="[45,160]"
+      width="1190"
+      height="500"
+      loadDisplayMode="scaleToFit" />
+
+    <Label
+      id="help"
+      text="OK: atualizar   |   Home: sair"
+      translation="[55,678]"
+      color="0xB8BBC2FF"
+      font="font:SmallSystemFont" />
+
+  </children>
+
+  <script
+    type="text/brightscript"
+    uri="pkg:/components/MainScene.brs" />
+
+</component>
