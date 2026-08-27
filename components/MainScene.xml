@@ -1,56 +1,61 @@
-<?xml version="1.0" encoding="utf-8" ?>
+<?xml version="1.0" encoding="UTF-8"?>
 
-<component name="MainScene" extends="Scene">
+<component name="MainScene"
+           extends="Scene">
 
-  <children>
+    <interface>
+        <field id="serverUrl" type="string" />
+    </interface>
 
-    <Rectangle
-      id="background"
-      width="1280"
-      height="720"
-      color="0x101114FF" />
+    <children>
 
-    <Label
-      id="title"
-      text="Navegador"
-      translation="[55,28]"
-      color="0xFFFFFFFF"
-      font="font:LargeBoldSystemFont" />
+        <Rectangle
+            id="background"
+            width="1280"
+            height="720"
+            color="0x101010FF" />
 
-    <Rectangle
-      id="addressBar"
-      translation="[45,82]"
-      width="1190"
-      height="58"
-      color="0x202328FF" />
+        <Label
+            id="title"
+            text="NAVEGADOR ROKU"
+            translation="[40,25]"
+            font="font:LargeBoldSystemFont" />
 
-    <Label
-      id="address"
-      text="https://www.google.com"
-      translation="[70,99]"
-      width="1130"
-      height="34"
-      color="0xFFFFFFFF"
-      font="font:MediumSystemFont" />
+        <Label
+            id="urlLabel"
+            text="Digite uma URL:"
+            translation="[40,90]"
+            font="font:MediumSystemFont" />
 
-    <Poster
-      id="siteView"
-      translation="[45,160]"
-      width="1190"
-      height="500"
-      loadDisplayMode="scaleToFit" />
+        <Label
+            id="urlText"
+            text="https://example.com"
+            translation="[40,135]"
+            width="1100"
+            height="55"
+            font="font:MediumSystemFont"
+            color="0xFFFFFFFF" />
 
-    <Label
-      id="help"
-      text="OK: atualizar   |   Home: sair"
-      translation="[55,678]"
-      color="0xB8BBC2FF"
-      font="font:SmallSystemFont" />
+        <Button
+            id="openButton"
+            text="ABRIR"
+            translation="[40,205]" />
 
-  </children>
+        <Poster
+            id="pageImage"
+            translation="[40,280]"
+            width="1200"
+            height="400"
+            loadDisplayMode="scaleToFit" />
 
-  <script
-    type="text/brightscript"
-    uri="pkg:/components/MainScene.brs" />
+        <Label
+            id="status"
+            text="Pronto"
+            translation="[40,685]"
+            font="font:SmallSystemFont" />
+
+    </children>
+
+    <script type="text/brightscript" uri="MainScene.brs" />
 
 </component>
