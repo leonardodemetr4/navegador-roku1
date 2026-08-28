@@ -1,10 +1,11 @@
 {
   "name": "navegador-roku-v3",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "private": true,
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "postinstall": "npx playwright install chromium"
   },
   "dependencies": {
     "express": "^4.21.2",
