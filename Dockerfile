@@ -1,5 +1,14 @@
-FROM nginx:alpine
+FROM node:20-bookworm
 
-COPY public /usr/share/nginx/html
+WORKDIR /app
 
-EXPOSE 80
+COPY package*.json ./
+RUN npm install
+RUN npx playwright install --with-deps chromium
+
+COPY . .
+
+ENV NODE_ENV=production
+EXPOSE 10000
+
+CMD ["node", "server.js"]
