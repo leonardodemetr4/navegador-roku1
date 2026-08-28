@@ -1,46 +1,85 @@
 sub init()
 
-    m.title = m.top.findNode("title")
-    m.urlText = m.top.findNode("urlText")
-    m.openButton = m.top.findNode("openButton")
-    m.pageImage = m.top.findNode("pageImage")
+    m.address = m.top.findNode("address")
     m.status = m.top.findNode("status")
+    m.pageBackground = m.top.findNode("pageBackground")
 
-    m.openButton.observeField("buttonSelected", "openPage")
+    m.serverUrl = "https://navegador-roku1-1.onrender.com"
+    m.currentUrl = "https://www.google.com"
 
-    m.serverUrl = "https://navegador-roku1.onrender.com"
+    m.top.setFocus(true)
 
-    m.status.text = "Servidor conectado"
+    atualizarEndereco()
 
 end sub
 
 
-sub openPage()
+sub atualizarEndereco()
 
-    url = m.urlText.text
+    m.address.text = m.currentUrl
+    m.status.text = "Pronto"
 
-    if url = invalid or url = ""
+end sub
 
-        m.status.text = "Digite uma URL."
 
-        return
+function onKeyEvent(key as String, press as Boolean) as Boolean
+
+    if not press
+        return false
+    end if
+
+    if key = "OK"
+
+        abrirPagina()
+        return true
+
+    else if key = "back"
+
+        voltarPagina()
+        return true
+
+    else if key = "right"
+
+        m.status.text = "Avançar"
+        return true
+
+    else if key = "left"
+
+        m.status.text = "Voltar"
+        return true
+
+    else if key = "home"
+
+        m.currentUrl = "https://www.google.com"
+        atualizarEndereco()
+        return true
 
     end if
 
-    if not url.instr("://") > 0
+    return true
 
-        url = "https://" + url
+end function
 
-    end if
+
+sub abrirPagina()
 
     m.status.text = "Abrindo página..."
 
-    encodedUrl = url.Escape()
+    encodedUrl = m.currentUrl.Escape()
 
-    imageUrl = m.serverUrl + "/browse?url=" + encodedUrl
+    url = m.serverUrl + "/browse?url=" + encodedUrl
 
-    m.pageImage.uri = imageUrl
+    m.pageBackground.color = "0xFFFFFFFF"
 
-    m.status.text = "Página carregada."
+    m.status.text = "Página: " + m.currentUrl
+
+end sub
+
+
+sub voltarPagina()
+
+    m.currentUrl = "https://www.google.com"
+
+    atualizarEndereco()
 
 end sub
