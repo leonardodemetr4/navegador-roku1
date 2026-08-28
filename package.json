@@ -1,6 +1,6 @@
 {
-  "name": "navegador-roku-v2",
-  "version": "2.0.0",
+  "name": "navegador-roku-v3",
+  "version": "3.0.0",
   "private": true,
   "main": "server.js",
   "scripts": {
