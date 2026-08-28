@@ -1,1 +1,111 @@
-public/index.html
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Navegador Roku</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #101114;
+      color: white;
+    }
+
+    header {
+      padding: 25px;
+      text-align: center;
+      background: #191b20;
+    }
+
+    h1 {
+      margin: 0 0 20px;
+    }
+
+    .barra {
+      display: flex;
+      max-width: 900px;
+      margin: auto;
+      gap: 10px;
+    }
+
+    input {
+      flex: 1;
+      padding: 15px;
+      border: none;
+      border-radius: 8px;
+      font-size: 17px;
+    }
+
+    button {
+      padding: 15px 25px;
+      border: none;
+      border-radius: 8px;
+      background: #6c3cff;
+      color: white;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    main {
+      padding: 25px;
+      text-align: center;
+    }
+
+    #resultado {
+      margin-top: 25px;
+      padding: 20px;
+      background: #1c1f26;
+      border-radius: 12px;
+    }
+  </style>
+</head>
+
+<body>
+
+<header>
+  <h1>🌐 Navegador Roku</h1>
+
+  <div class="barra">
+    <input
+      id="url"
+      type="text"
+      placeholder="Digite um site, exemplo.com"
+    >
+
+    <button onclick="abrirSite()">ABRIR</button>
+  </div>
+</header>
+
+<main>
+  <div id="resultado">
+    Digite um endereço acima para começar.
+  </div>
+</main>
+
+<script>
+function abrirSite() {
+  let url = document.getElementById("url").value.trim();
+
+  if (!url) {
+    return;
+  }
+
+  if (!url.startsWith("http://") && !url.startsWith("https://")) {
+    url = "https://" + url;
+  }
+
+  document.getElementById("resultado").innerHTML =
+    "<p>Abrindo:</p><strong>" + url + "</strong><br><br>" +
+    "<a href='" + url + "' target='_blank' style='color:#8d75ff'>" +
+    "Abrir site</a>";
+}
+</script>
+
+</body>
+</html>
