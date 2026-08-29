@@ -1,74 +1,275 @@
 <?xml version="1.0" encoding="utf-8" ?>
 
-<component name="MainScene" extends="Scene">
+<component
+    name="MainScene"
+    extends="Scene">
 
-  <children>
+    <script
+        type="text/brightscript"
+        uri="pkg:/components/MainScene.brs" />
 
-    <Rectangle
-      id="background"
-      width="1280"
-      height="720"
-      color="0x202124FF" />
+    <children>
 
-    <Label
-      id="title"
-      text="NAVEGADOR ROKU"
-      translation="[45,25]"
-      font="font:MediumBoldSystemFont"
-      color="0xFFFFFFFF" />
+        <!-- FUNDO PRINCIPAL -->
 
-    <Rectangle
-      id="addressBackground"
-      width="1050"
-      height="58"
-      translation="[45,90]"
-      color="0x303134FF" />
+        <Rectangle
+            width="1280"
+            height="720"
+            color="0x041522FF" />
 
-    <Label
-      id="address"
-      text="https://www.google.com"
-      translation="[70,108]"
-      width="1000"
-      height="35"
-      font="font:MediumSystemFont"
-      color="0xFFFFFFFF" />
 
-    <Label
-      id="back"
-      text="‹"
-      translation="[1115,98]"
-      width="45"
-      height="45"
-      font="font:LargeBoldSystemFont"
-      color="0xFFFFFFFF" />
+        <!-- CABECALHO -->
 
-    <Label
-      id="forward"
-      text="›"
-      translation="[1160,98]"
-      width="45"
-      height="45"
-      font="font:LargeBoldSystemFont"
-      color="0xFFFFFFFF" />
+        <Rectangle
+            translation="[0,0]"
+            width="1280"
+            height="96"
+            color="0x082A42FF" />
 
-    <Rectangle
-      id="pageBackground"
-      width="1190"
-      height="520"
-      translation="[45,170]"
-      color="0xFFFFFFFF" />
 
-    <Label
-      id="status"
-      text="Pronto"
-      translation="[55,690]"
-      font="font:SmallSystemFont"
-      color="0xAAAAAAFF" />
+        <Rectangle
+            translation="[0,94]"
+            width="1280"
+            height="2"
+            color="0x18C7D9FF" />
 
-  </children>
 
-  <script
-    type="text/brightscript"
-    uri="pkg:/components/MainScene.brs" />
+        <!-- LOGO -->
+
+        <Rectangle
+            translation="[24,18]"
+            width="56"
+            height="56"
+            color="0x0E6E91FF"
+            cornerRadius="12" />
+
+
+        <Label
+            translation="[24,27]"
+            width="56"
+            height="38"
+            text="N"
+            horizAlign="center"
+            color="0xFFFFFFFF"
+            font="font:LargeBoldSystemFont" />
+
+
+        <Label
+            translation="[94,18]"
+            width="150"
+            height="31"
+            text="NAVEGADOR"
+            color="0xFFFFFFFF"
+            font="font:MediumBoldSystemFont" />
+
+
+        <Label
+            translation="[94,50]"
+            width="150"
+            height="24"
+            text="ROKU V5"
+            color="0x48DBE8FF"
+            font="font:SmallBoldSystemFont" />
+
+
+        <!-- BOTAO VOLTAR -->
+
+        <Rectangle
+            translation="[250,20]"
+            width="48"
+            height="52"
+            color="0x104662FF"
+            cornerRadius="8" />
+
+
+        <Label
+            translation="[250,29]"
+            width="48"
+            height="32"
+            text="&lt;"
+            horizAlign="center"
+            color="0xFFFFFFFF"
+            font="font:MediumBoldSystemFont" />
+
+
+        <!-- BARRA DE ENDERECO -->
+
+        <Rectangle
+            translation="[310,20]"
+            width="760"
+            height="52"
+            color="0xF1F8FBFF"
+            cornerRadius="10" />
+
+
+        <Rectangle
+            translation="[322,31]"
+            width="30"
+            height="30"
+            color="0xD7EAF1FF"
+            cornerRadius="15" />
+
+
+        <Label
+            translation="[322,35]"
+            width="30"
+            height="23"
+            text="S"
+            horizAlign="center"
+            color="0x246078FF"
+            font="font:SmallBoldSystemFont" />
+
+
+        <Label
+            id="address"
+            translation="[365,31]"
+            width="685"
+            height="32"
+            text="https://example.com"
+            color="0x183B4BFF"
+            font="font:SmallSystemFont" />
+
+
+        <!-- RECARREGAR -->
+
+        <Rectangle
+            translation="[1082,20]"
+            width="52"
+            height="52"
+            color="0x0E6E91FF"
+            cornerRadius="8" />
+
+
+        <Label
+            translation="[1082,30]"
+            width="52"
+            height="30"
+            text="R"
+            horizAlign="center"
+            color="0xFFFFFFFF"
+            font="font:MediumBoldSystemFont" />
+
+
+        <!-- MENU -->
+
+        <Rectangle
+            translation="[1145,20]"
+            width="108"
+            height="52"
+            color="0x104662FF"
+            cornerRadius="8" />
+
+
+        <Label
+            translation="[1145,31]"
+            width="108"
+            height="30"
+            text="MENU"
+            horizAlign="center"
+            color="0xFFFFFFFF"
+            font="font:SmallBoldSystemFont" />
+
+
+        <!-- FUNDO AREA WEB -->
+
+        <Rectangle
+            translation="[18,108]"
+            width="1244"
+            height="520"
+            color="0x061B2BFF"
+            cornerRadius="14" />
+
+
+        <!-- SOMBRA -->
+
+        <Rectangle
+            translation="[30,120]"
+            width="1220"
+            height="496"
+            color="0x00000066"
+            cornerRadius="8" />
+
+
+        <!-- PAGINA -->
+
+        <Poster
+            id="pagePoster"
+            translation="[35,120]"
+            width="1210"
+            height="490"
+            loadDisplayMode="scaleToFit" />
+
+
+        <!-- CURSOR SOMBRA -->
+
+        <Rectangle
+            id="cursorShadow"
+            translation="[637,357]"
+            width="26"
+            height="26"
+            color="0x00000088"
+            cornerRadius="13" />
+
+
+        <!-- CURSOR -->
+
+        <Rectangle
+            id="cursor"
+            translation="[640,354]"
+            width="20"
+            height="20"
+            color="0x1EE4EFFF"
+            cornerRadius="10" />
+
+
+        <!-- BORDA CURSOR -->
+
+        <Rectangle
+            id="cursorCenter"
+            translation="[646,360]"
+            width="8"
+            height="8"
+            color="0xFFFFFFFF"
+            cornerRadius="4" />
+
+
+        <!-- STATUS -->
+
+        <Rectangle
+            translation="[18,638]"
+            width="1244"
+            height="68"
+            color="0x082A42FF"
+            cornerRadius="10" />
+
+
+        <Rectangle
+            id="statusDot"
+            translation="[38,652]"
+            width="12"
+            height="12"
+            color="0x1EE4EFFF"
+            cornerRadius="6" />
+
+
+        <Label
+            id="status"
+            translation="[60,644]"
+            width="1150"
+            height="28"
+            text="Iniciando navegador..."
+            color="0xFFFFFFFF"
+            font="font:SmallBoldSystemFont" />
+
+
+        <Label
+            translation="[38,676]"
+            width="1180"
+            height="24"
+            text="Setas: cursor   OK: clicar   Voltar: anterior   >>: descer   <<: subir   *: endereco   Replay: atualizar"
+            color="0xA8D8E8FF"
+            font="font:SmallSystemFont" />
+
+    </children>
 
 </component>
