@@ -4,16 +4,21 @@ const { chromium } = require("playwright");
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-let browser = null;
 const sessions = new Map();
+let browser = null;
 
 async function getBrowser() {
   if (!browser) {
     browser = await chromium.launch({
       headless: true,
-      args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+      args: [
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu"
+      ]
     });
   }
+
   return browser;
 }
 
@@ -21,11 +26,14 @@ function validSession(id) {
   return /^[A-Za-z0-9_-]{1,50}$/.test(id || "");
 }
 
-function validUrl(text) {
+function validUrl(value) {
   try {
-    const url = new URL(text);
+    const url = new URL(value);
 
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
+    if (
+      url.protocol !== "http:" &&
+      url.protocol !== "https:"
+    ) {
       return null;
     }
 
@@ -35,8 +43,8 @@ function validUrl(text) {
   }
 }
 
-function escapeHtml(text) {
-  return String(text || "")
+function escapeHtml(value) {
+  return String(value || "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -44,20 +52,18 @@ function escapeHtml(text) {
     .replace(/'/g, "&#39;");
 }
 
-function cleanXml(text) {
-  return String(text || "")
+function cleanXml(value) {
+  return String(value || "")
     .replace(/<!\[CDATA\[|\]\]>/g, "")
     .replace(/<[^>]+>/g, " ")
     .replace(/&amp;/g, "&")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-async function newSession(id) {
+async function createSession(id) {
   const old = sessions.get(id);
 
   if (old) {
@@ -75,11 +81,13 @@ async function newSession(id) {
     },
 
     locale: "pt-BR",
+
     ignoreHTTPSErrors: true,
 
     userAgent:
       "Mozilla/5.0 (X11; Linux x86_64) " +
-      "AppleWebKit/537.36 (KHTML, like Gecko) " +
+      "AppleWebKit/537.36 " +
+      "(KHTML, like Gecko) " +
       "Chrome/131.0.0.0 Safari/537.36"
   });
 
@@ -111,7 +119,81 @@ function getSession(id) {
   return session;
 }
 
-function sendImage(res, image) {
+async function waitVisual(page, maxWait = 5000) {
+  try {
+    await page.evaluate(() => {
+      const images =
+        Array.from(
+          document.images || []
+        );
+
+      for (const img of images) {
+        try {
+          img.loading = "eager";
+        } catch {}
+      }
+    });
+  } catch {}
+
+  const end =
+    Date.now() + maxWait;
+
+  while (
+    Date.now() < end
+  ) {
+    try {
+      const pending =
+        await page.evaluate(() => {
+          return Array
+            .from(
+              document.images || []
+            )
+            .filter(img => {
+              return (
+                img.src &&
+                !img.complete
+              );
+            })
+            .length;
+        });
+
+      if (pending === 0) {
+        break;
+      }
+    } catch {
+      break;
+    }
+
+    await page.waitForTimeout(
+      300
+    );
+  }
+
+  try {
+    await page.waitForLoadState(
+      "networkidle",
+      {
+        timeout: 1500
+      }
+    );
+  } catch {}
+
+  await page.waitForTimeout(
+    400
+  );
+}
+
+async function sendScreenshot(
+  page,
+  res
+) {
+  const image =
+    await page.screenshot({
+      type: "png",
+      fullPage: false,
+      animations: "disabled"
+    });
+
   res.set(
     "Cache-Control",
     "no-store, no-cache, must-revalidate"
@@ -133,136 +215,7 @@ function sendImage(res, image) {
     .send(image);
 }
 
-async function waitForVisualReady(
-  page,
-  maxWait = 6500
-) {
-  try {
-    await page.evaluate(() => {
-      const images =
-        Array.from(
-          document.images || []
-        );
-
-      for (const img of images) {
-        try {
-          img.loading = "eager";
-          img.decoding = "sync";
-        } catch {}
-      }
-
-      window.scrollBy(0, 1);
-      window.scrollBy(0, -1);
-    });
-  } catch {}
-
-  const start =
-    Date.now();
-
-  while (
-    Date.now() - start <
-    maxWait
-  ) {
-    try {
-      const state =
-        await page.evaluate(() => {
-          const images =
-            Array.from(
-              document.images || []
-            );
-
-          const pending =
-            images.filter(img => {
-              if (!img.src) {
-                return false;
-              }
-
-              if (!img.complete) {
-                return true;
-              }
-
-              if (
-                typeof img.naturalWidth === "number" &&
-                img.naturalWidth === 0
-              ) {
-                return true;
-              }
-
-              return false;
-            }).length;
-
-          const textLength =
-            document.body
-              ? (
-                  document.body.innerText ||
-                  ""
-                ).trim().length
-              : 0;
-
-          return {
-            pending,
-            total: images.length,
-            textLength
-          };
-        });
-
-      if (
-        state.pending === 0 &&
-        (
-          state.textLength > 20 ||
-          state.total > 0
-        )
-      ) {
-        break;
-      }
-    } catch {
-      break;
-    }
-
-    await page.waitForTimeout(
-      350
-    );
-  }
-
-  try {
-    await page.waitForLoadState(
-      "networkidle",
-      {
-        timeout: 1800
-      }
-    );
-  } catch {}
-
-  await page.waitForTimeout(
-    500
-  );
-}
-
-async function screenshot(
-  page,
-  res,
-  delay = 0
-) {
-  if (delay > 0) {
-    await page.waitForTimeout(
-      delay
-    );
-  }
-
-  const image =
-    await page.screenshot({
-      type: "png",
-      fullPage: false,
-      animations: "disabled"
-    });
-
-  return sendImage(
-    res,
-    image
-  );
-}
-
-async function openPage(
+async function openUrl(
   page,
   rawUrl
 ) {
@@ -290,22 +243,22 @@ async function openPage(
       }
     );
 
-    await waitForVisualReady(
+    await waitVisual(
       page,
-      6500
+      6000
     );
 
     return true;
   } catch (error) {
     console.log(
-      "Erro ao abrir:",
+      "Falha ao abrir:",
       error.message
     );
 
     try {
-      await waitForVisualReady(
+      await waitVisual(
         page,
-        2500
+        2000
       );
 
       return await page.evaluate(
@@ -314,11 +267,14 @@ async function openPage(
             return false;
           }
 
-          return (
+          const text =
             (
               document.body.innerText ||
               ""
-            ).trim().length > 10 ||
+            ).trim();
+
+          return (
+            text.length > 10 ||
             document.images.length > 0
           );
         }
@@ -329,11 +285,11 @@ async function openPage(
   }
 }
 
-async function showMessage(
+async function messagePage(
   page,
   res,
   title,
-  message
+  text
 ) {
   const html = `
 <!doctype html>
@@ -348,7 +304,7 @@ async function showMessage(
 
 body {
   margin: 0;
-  background: #f6f7f8;
+  background: #f5f7f8;
   color: #222;
   font-family: Arial, sans-serif;
 }
@@ -363,7 +319,7 @@ body {
 }
 
 h1 {
-  margin-top: 0;
+  margin: 0 0 18px;
   font-size: 38px;
 }
 
@@ -385,7 +341,7 @@ ${escapeHtml(title)}
 </h1>
 
 <p>
-${escapeHtml(message)}
+${escapeHtml(text)}
 </p>
 
 </div>
@@ -399,31 +355,28 @@ ${escapeHtml(message)}
     html
   );
 
-  return screenshot(
+  return sendScreenshot(
     page,
-    res,
-    100
+    res
   );
 }
 
-async function searchBingRss(
-  query
-) {
-  const url =
-    "https://www.bing.com/search" +
-    "?format=rss&setlang=pt-BR&q=" +
-    encodeURIComponent(query);
-
+async function searchRss(query) {
   const controller =
     new AbortController();
 
-  const timeout =
+  const timer =
     setTimeout(
       () => controller.abort(),
-      12000
+      10000
     );
 
   try {
+    const url =
+      "https://www.bing.com/search" +
+      "?format=rss&setlang=pt-BR&q=" +
+      encodeURIComponent(query);
+
     const response =
       await fetch(
         url,
@@ -443,7 +396,7 @@ async function searchBingRss(
 
     if (!response.ok) {
       throw new Error(
-        "Busca HTTP " +
+        "HTTP " +
         response.status
       );
     }
@@ -451,7 +404,7 @@ async function searchBingRss(
     const xml =
       await response.text();
 
-    const blocks =
+    const items =
       xml.match(
         /<item[\s\S]*?<\/item>/gi
       ) || [];
@@ -460,7 +413,7 @@ async function searchBingRss(
 
     for (
       const item
-      of blocks.slice(0, 12)
+      of items.slice(0, 10)
     ) {
       const titleMatch =
         item.match(
@@ -472,7 +425,7 @@ async function searchBingRss(
           /<link>([\s\S]*?)<\/link>/i
         );
 
-      const descMatch =
+      const descriptionMatch =
         item.match(
           /<description>([\s\S]*?)<\/description>/i
         );
@@ -484,45 +437,41 @@ async function searchBingRss(
         continue;
       }
 
-      const title =
-        cleanXml(
-          titleMatch[1]
-        );
-
       const link =
         cleanXml(
           linkMatch[1]
         );
-
-      const description =
-        descMatch
-          ? cleanXml(
-              descMatch[1]
-            )
-          : "";
 
       if (!validUrl(link)) {
         continue;
       }
 
       results.push({
-        title,
+        title:
+          cleanXml(
+            titleMatch[1]
+          ),
+
         link,
-        description
+
+        description:
+          descriptionMatch
+            ? cleanXml(
+                descriptionMatch[1]
+              )
+            : ""
       });
     }
 
     return results;
   } finally {
     clearTimeout(
-      timeout
+      timer
     );
   }
 }
 
-function fallbackResults(
-  query
-) {
+function fallbackResults(query) {
   const q =
     query.trim();
 
@@ -534,19 +483,19 @@ function fallbackResults(
       [
         "YouTube",
         "https://www.youtube.com/",
-        "Vídeos, canais, música e transmissões."
+        "Site oficial do YouTube."
       ],
 
       [
         "YouTube Music",
         "https://music.youtube.com/",
-        "Música e playlists do YouTube."
+        "Musica e playlists."
       ],
 
       [
-        "YouTube Help",
+        "Ajuda do YouTube",
         "https://support.google.com/youtube/",
-        "Ajuda oficial do YouTube."
+        "Central de ajuda oficial."
       ]
     ],
 
@@ -554,13 +503,13 @@ function fallbackResults(
       [
         "Facebook",
         "https://www.facebook.com/",
-        "Rede social Facebook."
+        "Site oficial do Facebook."
       ],
 
       [
-        "Facebook Help",
+        "Ajuda do Facebook",
         "https://www.facebook.com/help/",
-        "Central de ajuda do Facebook."
+        "Central de ajuda."
       ]
     ],
 
@@ -568,27 +517,13 @@ function fallbackResults(
       [
         "Instagram",
         "https://www.instagram.com/",
-        "Fotos, vídeos e perfis no Instagram."
+        "Site oficial do Instagram."
       ],
 
       [
-        "Instagram Help",
+        "Ajuda do Instagram",
         "https://help.instagram.com/",
-        "Central de ajuda do Instagram."
-      ]
-    ],
-
-    netflix: [
-      [
-        "Netflix",
-        "https://www.netflix.com/",
-        "Site oficial da Netflix."
-      ],
-
-      [
-        "Netflix Help",
-        "https://help.netflix.com/",
-        "Central de ajuda da Netflix."
+        "Central de ajuda."
       ]
     ],
 
@@ -603,49 +538,46 @@ function fallbackResults(
         "Roku Support",
         "https://support.roku.com/",
         "Suporte oficial da Roku."
-      ],
-
-      [
-        "The Roku Channel",
-        "https://therokuchannel.roku.com/",
-        "Conteúdo do Roku Channel."
       ]
     ]
   };
 
-  if (presets[key]) {
-    return presets[key].map(
-      item => ({
-        title: item[0],
-        link: item[1],
-        description: item[2]
-      })
-    );
-  }
+  let list =
+    presets[key];
 
-  return [
-    {
-      title:
+  if (!list) {
+    list = [
+      [
         'Pesquisar por "' +
         q +
         '" no Bing',
 
-      link:
         "https://www.bing.com/search?q=" +
         encodeURIComponent(q),
 
+        "Abrir a pesquisa completa."
+      ]
+    ];
+  }
+
+  return list.map(
+    item => ({
+      title:
+        item[0],
+
+      link:
+        item[1],
+
       description:
-        "Abrir a pesquisa completa no Bing."
-    }
-  ];
+        item[2]
+    })
+  );
 }
 
-async function searchWeb(
-  query
-) {
+async function searchWeb(query) {
   try {
     const results =
-      await searchBingRss(
+      await searchRss(
         query
       );
 
@@ -656,7 +588,7 @@ async function searchWeb(
     }
   } catch (error) {
     console.log(
-      "RSS indisponível:",
+      "RSS indisponivel:",
       error.message
     );
   }
@@ -666,28 +598,22 @@ async function searchWeb(
   );
 }
 
-function searchPage(
+function searchHtml(
   query,
   results
 ) {
   let cards = "";
 
-  for (
-    let i = 0;
-    i < results.length;
-    i++
-  ) {
-    const item =
-      results[i];
-
-    cards += `
+  results.forEach(
+    (item, index) => {
+      cards += `
 <a
   class="result"
   href="${escapeHtml(item.link)}"
 >
 
 <div class="number">
-${i + 1}
+${index + 1}
 </div>
 
 <div class="content">
@@ -708,7 +634,8 @@ ${escapeHtml(item.description)}
 
 </a>
 `;
-  }
+    }
+  );
 
   return `
 <!doctype html>
@@ -729,8 +656,8 @@ body {
   margin: 0;
   padding: 24px 34px 60px;
   background: #f4f6f7;
-  color: #1f343d;
   font-family: Arial, sans-serif;
+  color: #1f343d;
 }
 
 .header {
@@ -870,16 +797,16 @@ app.get(
 
     try {
       const session =
-        await newSession(id);
+        await createSession(id);
 
       const ok =
-        await openPage(
+        await openUrl(
           session.page,
           url
         );
 
       if (!ok) {
-        return showMessage(
+        return messagePage(
           session.page,
           res,
           "Pagina indisponivel",
@@ -887,7 +814,7 @@ app.get(
         );
       }
 
-      return screenshot(
+      return sendScreenshot(
         session.page,
         res
       );
@@ -937,7 +864,7 @@ app.get(
 
     try {
       const session =
-        await newSession(id);
+        await createSession(id);
 
       const results =
         await searchWeb(
@@ -952,7 +879,7 @@ app.get(
       );
 
       await session.page.setContent(
-        searchPage(
+        searchHtml(
           query,
           results
         ),
@@ -962,10 +889,9 @@ app.get(
         }
       );
 
-      return screenshot(
+      return sendScreenshot(
         session.page,
-        res,
-        100
+        res
       );
     } catch (error) {
       console.error(
@@ -985,13 +911,12 @@ app.get(
 app.get(
   "/v5/click",
   async (req, res) => {
-    const id =
-      String(
-        req.query.session || ""
-      ).trim();
-
     const session =
-      getSession(id);
+      getSession(
+        String(
+          req.query.session || ""
+        ).trim()
+      );
 
     if (!session) {
       return res
@@ -1041,7 +966,7 @@ app.get(
       );
 
     try {
-      const target =
+      const href =
         await session.page.evaluate(
           ({ x, y }) => {
             const elements =
@@ -1052,7 +977,7 @@ app.get(
               );
 
             let best = null;
-            let distance = Infinity;
+            let bestDistance = Infinity;
 
             for (
               const element
@@ -1086,42 +1011,45 @@ app.get(
                   )
                 );
 
-              const d =
+              const distance =
                 Math.hypot(
                   nx - x,
                   ny - y
                 );
 
-              if (d < distance) {
-                distance = d;
-                best = element;
+              if (
+                distance <
+                bestDistance
+              ) {
+                bestDistance =
+                  distance;
+
+                best =
+                  element;
               }
             }
 
             if (
               !best ||
-              distance > 170
+              bestDistance > 170
             ) {
-              return {
-                found: false,
-                href: ""
-              };
+              return "";
             }
 
             const anchor =
-              best.tagName.toLowerCase() === "a"
+              best.tagName
+                .toLowerCase() === "a"
                 ? best
                 : best.closest("a");
 
-            return {
-              found: true,
+            if (
+              anchor &&
+              anchor.href
+            ) {
+              return anchor.href;
+            }
 
-              href:
-                anchor &&
-                anchor.href
-                  ? anchor.href
-                  : ""
-            };
+            return "";
           },
           {
             x: px,
@@ -1129,13 +1057,10 @@ app.get(
           }
         );
 
-      if (
-        target.found &&
-        target.href
-      ) {
-        await openPage(
+      if (href) {
+        await openUrl(
           session.page,
-          target.href
+          href
         );
       } else {
         try {
@@ -1146,14 +1071,14 @@ app.get(
               py
             );
 
-          await waitForVisualReady(
+          await waitVisual(
             session.page,
-            3500
+            2500
           );
         } catch {}
       }
 
-      return screenshot(
+      return sendScreenshot(
         session.page,
         res
       );
@@ -1163,7 +1088,7 @@ app.get(
         error
       );
 
-      return showMessage(
+      return messagePage(
         session.page,
         res,
         "Erro no clique",
@@ -1200,13 +1125,13 @@ app.get(
           18000
       });
 
-      await waitForVisualReady(
+      await waitVisual(
         session.page,
-        4000
+        3000
       );
     } catch {}
 
-    return screenshot(
+    return sendScreenshot(
       session.page,
       res
     );
@@ -1240,13 +1165,13 @@ app.get(
           18000
       });
 
-      await waitForVisualReady(
+      await waitVisual(
         session.page,
-        4000
+        3000
       );
     } catch {}
 
-    return screenshot(
+    return sendScreenshot(
       session.page,
       res
     );
@@ -1300,11 +1225,56 @@ app.get(
         dy
       );
 
-      await session.page
-        .waitForTimeout(
-          250
-        );
-
-      await waitForVisualReady(
+      await waitVisual(
         session.page,
-   
+        1200
+      );
+    } catch {}
+
+    return sendScreenshot(
+      session.page,
+      res
+    );
+  }
+);
+
+setInterval(
+  async () => {
+    const now =
+      Date.now();
+
+    for (
+      const [id, session]
+      of sessions
+    ) {
+      if (
+        now - session.last >
+        30 * 60 * 1000
+      ) {
+        try {
+          await session
+            .context
+            .close();
+        } catch {}
+
+        sessions.delete(id);
+      }
+    }
+  },
+  60000
+);
+
+app.listen(
+  PORT,
+  "0.0.0.0",
+  () => {
+    console.log(
+      "Navegador Roku V6.1 iniciado na porta " +
+      PORT
+    );
+
+    console.log(
+      "Pesquisa e carregamento de imagens ativados"
+    );
+  }
+);
