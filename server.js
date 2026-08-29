@@ -5,7 +5,6 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 
 let browserPromise;
-
 const sessions = new Map();
 
 
@@ -14,20 +13,15 @@ const sessions = new Map();
 ========================================================= */
 
 async function getBrowser() {
-
   if (!browserPromise) {
-
     browserPromise = chromium.launch({
       headless: true,
-
       args: [
         "--no-sandbox",
         "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--disable-features=IsolateOrigins,site-per-process"
+        "--disable-gpu"
       ]
     });
-
   }
 
   return browserPromise;
@@ -35,11 +29,9 @@ async function getBrowser() {
 
 
 async function createPage() {
-
   const browser = await getBrowser();
 
   const context = await browser.newContext({
-
     viewport: {
       width: 1280,
       height: 720
@@ -51,15 +43,11 @@ async function createPage() {
       "Chrome/131.0.0.0 Safari/537.36",
 
     ignoreHTTPSErrors: true
-
   });
-
 
   const page = await context.newPage();
 
-
   page.setDefaultTimeout(20000);
-
 
   return {
     context,
@@ -73,9 +61,7 @@ async function createPage() {
 ========================================================= */
 
 function validUrl(raw) {
-
   try {
-
     const url = new URL(raw);
 
     if (
@@ -86,22 +72,101 @@ function validUrl(raw) {
     }
 
     return url;
-
   } catch {
-
     return null;
-
   }
-
 }
 
 
 function validSession(id) {
+  return /^[A-Za-z0-9_-]{1,40}$/.test(id || "");
+}
 
-  return /^[A-Za-z0-9_-]{1,40}$/.test(
-    id || ""
-  );
 
+/* =========================================================
+   ESPERAR A PAGINA RENDERIZAR
+========================================================= */
+
+async function waitPageReady(page) {
+  try {
+    await page.waitForLoadState(
+      "domcontentloaded",
+      {
+        timeout: 15000
+      }
+    );
+  } catch {}
+
+
+  try {
+    await page.waitForLoadState(
+      "networkidle",
+      {
+        timeout: 7000
+      }
+    );
+  } catch {}
+
+
+  try {
+    await page.waitForFunction(
+      () => {
+        return (
+          document.body &&
+          document.body.innerText &&
+          document.body.innerText.trim().length > 20
+        );
+      },
+      {
+        timeout: 5000
+      }
+    );
+  } catch {}
+
+
+  try {
+    await page.evaluate(() => {
+      const images =
+        Array.from(
+          document.images || []
+        );
+
+      return Promise.all(
+        images
+          .filter(img => !img.complete)
+          .slice(0, 20)
+          .map(img => {
+            return new Promise(resolve => {
+              const done = () => resolve();
+
+              img.addEventListener(
+                "load",
+                done,
+                {
+                  once: true
+                }
+              );
+
+              img.addEventListener(
+                "error",
+                done,
+                {
+                  once: true
+                }
+              );
+
+              setTimeout(
+                done,
+                2500
+              );
+            });
+          })
+      );
+    });
+  } catch {}
+
+
+  await page.waitForTimeout(1200);
 }
 
 
@@ -110,7 +175,6 @@ function validSession(id) {
 ========================================================= */
 
 function sendImage(res, image) {
-
   res.set(
     "Cache-Control",
     "no-store, no-cache, must-revalidate, proxy-revalidate"
@@ -134,99 +198,22 @@ function sendImage(res, image) {
   res.type("png");
 
   res.send(image);
-
 }
 
 
 async function makeScreenshot(page, res) {
+  await waitPageReady(page);
 
-  await page.waitForTimeout(180);
-
-  const image = await page.screenshot({
-    type: "png",
-    fullPage: false
-  });
+  const image =
+    await page.screenshot({
+      type: "png",
+      fullPage: false
+    });
 
   sendImage(
     res,
     image
   );
-
-}
-
-
-/* =========================================================
-   INFORMACOES DA PAGINA
-========================================================= */
-
-async function getPageInfo(page) {
-
-  let title = "";
-
-  try {
-
-    title = await page.title();
-
-  } catch {}
-
-
-  let scrollInfo = {
-    top: 0,
-    height: 720,
-    viewport: 720
-  };
-
-
-  try {
-
-    scrollInfo = await page.evaluate(() => {
-
-      return {
-
-        top:
-          Math.round(
-            window.scrollY ||
-            document.documentElement.scrollTop ||
-            0
-          ),
-
-        height:
-          Math.max(
-            document.body.scrollHeight || 0,
-            document.documentElement.scrollHeight || 0
-          ),
-
-        viewport:
-          window.innerHeight || 720
-
-      };
-
-    });
-
-  } catch {}
-
-
-  return {
-
-    ok: true,
-
-    url:
-      page.url(),
-
-    title:
-      title || "Pagina",
-
-    scrollTop:
-      scrollInfo.top,
-
-    scrollHeight:
-      scrollInfo.height,
-
-    viewportHeight:
-      scrollInfo.viewport
-
-  };
-
 }
 
 
@@ -234,33 +221,26 @@ async function getPageInfo(page) {
    INICIO
 ========================================================= */
 
-app.get("/", (_req, res) => {
-
-  res.send(
-    "<html>" +
-    "<head><title>Navegador Roku V5</title></head>" +
-    "<body style='font-family:Arial;background:#071a2d;color:white;padding:40px'>" +
-    "<h1>Navegador Roku V5</h1>" +
-    "<p>Servidor online.</p>" +
-    "</body>" +
-    "</html>"
-  );
-
-});
+app.get(
+  "/",
+  (_req, res) => {
+    res.send(
+      "<h1>Navegador Roku V5 Melhorado</h1>" +
+      "<p>Servidor online.</p>"
+    );
+  }
+);
 
 
-app.get("/health", (_req, res) => {
-
-  res.json({
-
-    ok: true,
-
-    service:
-      "roku-browser-v5"
-
-  });
-
-});
+app.get(
+  "/health",
+  (_req, res) => {
+    res.json({
+      ok: true,
+      service: "roku-browser-v5-render-fix"
+    });
+  }
+);
 
 
 /* =========================================================
@@ -270,7 +250,6 @@ app.get("/health", (_req, res) => {
 app.get(
   "/v5/open",
   async (req, res) => {
-
     const id =
       String(
         req.query.session || ""
@@ -284,13 +263,11 @@ app.get(
 
 
     if (!validSession(id)) {
-
       return res
         .status(400)
         .send(
           "Sessao invalida"
         );
-
     }
 
 
@@ -299,32 +276,24 @@ app.get(
 
 
     if (!url) {
-
       return res
         .status(400)
         .send(
           "URL invalida"
         );
-
     }
 
 
     try {
-
       if (sessions.has(id)) {
-
         try {
-
           await sessions
             .get(id)
             .context
             .close();
-
         } catch {}
 
-
         sessions.delete(id);
-
       }
 
 
@@ -343,13 +312,11 @@ app.get(
       await page.goto(
         url.toString(),
         {
-
           waitUntil:
             "domcontentloaded",
 
           timeout:
             30000
-
         }
       );
 
@@ -357,13 +324,9 @@ app.get(
       sessions.set(
         id,
         {
-
           context,
           page,
-
-          last:
-            Date.now()
-
+          last: Date.now()
         }
       );
 
@@ -380,7 +343,6 @@ app.get(
       );
 
     } catch (err) {
-
       console.error(
         "open error:",
         err
@@ -392,83 +354,7 @@ app.get(
         .send(
           "Falha ao abrir pagina"
         );
-
     }
-
-  }
-);
-
-
-/* =========================================================
-   INFORMACOES
-========================================================= */
-
-app.get(
-  "/v5/info",
-  async (req, res) => {
-
-    const id =
-      String(
-        req.query.session || ""
-      ).trim();
-
-
-    if (
-      !validSession(id) ||
-      !sessions.has(id)
-    ) {
-
-      return res
-        .status(404)
-        .json({
-          ok: false
-        });
-
-    }
-
-
-    try {
-
-      const session =
-        sessions.get(id);
-
-
-      session.last =
-        Date.now();
-
-
-      const info =
-        await getPageInfo(
-          session.page
-        );
-
-
-      res.set(
-        "Cache-Control",
-        "no-store"
-      );
-
-
-      res.json(
-        info
-      );
-
-    } catch (err) {
-
-      console.error(
-        "info error:",
-        err
-      );
-
-
-      res
-        .status(500)
-        .json({
-          ok: false
-        });
-
-    }
-
   }
 );
 
@@ -480,7 +366,6 @@ app.get(
 app.get(
   "/v5/click",
   async (req, res) => {
-
     const id =
       String(
         req.query.session || ""
@@ -491,13 +376,11 @@ app.get(
       !validSession(id) ||
       !sessions.has(id)
     ) {
-
       return res
         .status(404)
         .send(
           "Sessao nao encontrada"
         );
-
     }
 
 
@@ -517,18 +400,15 @@ app.get(
       !Number.isFinite(receivedX) ||
       !Number.isFinite(receivedY)
     ) {
-
       return res
         .status(400)
         .send(
           "Coordenadas invalidas"
         );
-
     }
 
 
     try {
-
       const session =
         sessions.get(id);
 
@@ -566,145 +446,244 @@ app.get(
 
 
       console.log(
-        "Clique:",
+        "Clique recebido:",
         x,
         y
       );
 
 
-      const target =
-        await page.evaluate(
-          ({ x, y }) => {
-
-            const elements =
-              document.elementsFromPoint(
-                x,
-                y
-              );
+      let clicked =
+        false;
 
 
-            for (
-              const element
-              of elements
-            ) {
+      try {
+        const result =
+          await page.evaluate(
+            ({ x, y }) => {
+              const selector =
+                [
+                  "a",
+                  "button",
+                  "input",
+                  "select",
+                  "textarea",
+                  "[role='button']",
+                  "[role='link']",
+                  "[onclick]"
+                ].join(",");
 
-              const clickable =
-                element.closest(
-                  [
-                    "a",
-                    "button",
-                    "input",
-                    "select",
-                    "textarea",
-                    "[role='button']",
-                    "[role='link']",
-                    "[onclick]"
-                  ].join(",")
+
+              const elements =
+                Array.from(
+                  document.querySelectorAll(
+                    selector
+                  )
                 );
 
 
-              if (clickable) {
+              let best =
+                null;
 
-                const link =
-                  clickable.closest(
-                    "a"
+
+              let bestDistance =
+                Infinity;
+
+
+              for (
+                const el
+                of elements
+              ) {
+                const rect =
+                  el.getBoundingClientRect();
+
+
+                if (
+                  rect.width <= 0 ||
+                  rect.height <= 0
+                ) {
+                  continue;
+                }
+
+
+                const style =
+                  window.getComputedStyle(
+                    el
                   );
 
 
                 if (
-                  link &&
-                  link.href
+                  style.display === "none" ||
+                  style.visibility === "hidden" ||
+                  Number(style.opacity) === 0
                 ) {
-
-                  return {
-
-                    found:
-                      true,
-
-                    type:
-                      "link",
-
-                    href:
-                      link.href
-
-                  };
-
+                  continue;
                 }
 
 
-                return {
+                const nearestX =
+                  Math.max(
+                    rect.left,
+                    Math.min(
+                      x,
+                      rect.right
+                    )
+                  );
 
-                  found:
-                    true,
 
-                  type:
-                    "element"
+                const nearestY =
+                  Math.max(
+                    rect.top,
+                    Math.min(
+                      y,
+                      rect.bottom
+                    )
+                  );
 
-                };
 
+                const dx =
+                  nearestX - x;
+
+
+                const dy =
+                  nearestY - y;
+
+
+                const distance =
+                  Math.sqrt(
+                    dx * dx +
+                    dy * dy
+                  );
+
+
+                if (
+                  distance <
+                  bestDistance
+                ) {
+                  bestDistance =
+                    distance;
+
+                  best =
+                    el;
+                }
               }
 
+
+              if (
+                !best ||
+                bestDistance > 160
+              ) {
+                return {
+                  found: false
+                };
+              }
+
+
+              const link =
+                best.tagName &&
+                best.tagName
+                  .toLowerCase() === "a"
+                  ? best
+                  : best.closest("a");
+
+
+              if (
+                link &&
+                link.href
+              ) {
+                return {
+                  found: true,
+                  type: "link",
+                  href: link.href,
+                  distance:
+                    Math.round(
+                      bestDistance
+                    )
+                };
+              }
+
+
+              return {
+                found: true,
+                type: "click",
+                distance:
+                  Math.round(
+                    bestDistance
+                  )
+              };
+            },
+            {
+              x,
+              y
             }
+          );
 
 
-            return {
-              found: false
-            };
-
-          },
-          {
-            x,
-            y
-          }
+        console.log(
+          "Resultado clique:",
+          result
         );
 
 
-      if (
-        target.found &&
-        target.type === "link" &&
-        target.href
-      ) {
+        if (
+          result.found &&
+          result.type === "link" &&
+          result.href
+        ) {
+          const linkUrl =
+            validUrl(
+              result.href
+            );
 
-        const linkUrl =
-          validUrl(
-            target.href
-          );
 
+          if (linkUrl) {
+            await page.goto(
+              linkUrl.toString(),
+              {
+                waitUntil:
+                  "domcontentloaded",
 
-        if (linkUrl) {
+                timeout:
+                  30000
+              }
+            );
 
-          await page.goto(
-            linkUrl.toString(),
-            {
+            clicked =
+              true;
+          }
 
-              waitUntil:
-                "domcontentloaded",
-
-              timeout:
-                30000
-
-            }
-          );
-
-        }
-
-      } else {
-
-        try {
-
+        } else if (
+          result.found
+        ) {
           await page.mouse.click(
             x,
             y
           );
 
+          clicked =
+            true;
+        }
 
-          await page.waitForTimeout(
-            300
-          );
-
-        } catch {}
-
+      } catch (err) {
+        console.log(
+          "Clique especial falhou:",
+          err.message
+        );
       }
+
+
+      if (!clicked) {
+        try {
+          await page.mouse.click(
+            x,
+            y
+          );
+        } catch {}
+      }
+
+
+      await page.waitForTimeout(
+        700
+      );
 
 
       console.log(
@@ -719,7 +698,6 @@ app.get(
       );
 
     } catch (err) {
-
       console.error(
         "click error:",
         err
@@ -731,9 +709,7 @@ app.get(
         .send(
           "Falha no clique"
         );
-
     }
-
   }
 );
 
@@ -745,7 +721,6 @@ app.get(
 app.get(
   "/v5/back",
   async (req, res) => {
-
     const id =
       String(
         req.query.session || ""
@@ -756,18 +731,15 @@ app.get(
       !validSession(id) ||
       !sessions.has(id)
     ) {
-
       return res
         .status(404)
         .send(
           "Sessao nao encontrada"
         );
-
     }
 
 
     try {
-
       const session =
         sessions.get(id);
 
@@ -782,17 +754,21 @@ app.get(
 
       await page
         .goBack({
-
           waitUntil:
             "domcontentloaded",
 
           timeout:
             15000
-
         })
         .catch(
           () => null
         );
+
+
+      console.log(
+        "Voltou para:",
+        page.url()
+      );
 
 
       await makeScreenshot(
@@ -801,7 +777,6 @@ app.get(
       );
 
     } catch (err) {
-
       console.error(
         "back error:",
         err
@@ -813,9 +788,7 @@ app.get(
         .send(
           "Falha ao voltar"
         );
-
     }
-
   }
 );
 
@@ -827,7 +800,6 @@ app.get(
 app.get(
   "/v5/forward",
   async (req, res) => {
-
     const id =
       String(
         req.query.session || ""
@@ -838,18 +810,15 @@ app.get(
       !validSession(id) ||
       !sessions.has(id)
     ) {
-
       return res
         .status(404)
         .send(
           "Sessao nao encontrada"
         );
-
     }
 
 
     try {
-
       const session =
         sessions.get(id);
 
@@ -864,17 +833,21 @@ app.get(
 
       await page
         .goForward({
-
           waitUntil:
             "domcontentloaded",
 
           timeout:
             15000
-
         })
         .catch(
           () => null
         );
+
+
+      console.log(
+        "Avancou para:",
+        page.url()
+      );
 
 
       await makeScreenshot(
@@ -883,7 +856,6 @@ app.get(
       );
 
     } catch (err) {
-
       console.error(
         "forward error:",
         err
@@ -895,9 +867,7 @@ app.get(
         .send(
           "Falha ao avancar"
         );
-
     }
-
   }
 );
 
@@ -909,7 +879,6 @@ app.get(
 app.get(
   "/v5/scroll",
   async (req, res) => {
-
     const id =
       String(
         req.query.session || ""
@@ -920,13 +889,11 @@ app.get(
       !validSession(id) ||
       !sessions.has(id)
     ) {
-
       return res
         .status(404)
         .send(
           "Sessao nao encontrada"
         );
-
     }
 
 
@@ -937,28 +904,21 @@ app.get(
 
 
     if (!Number.isFinite(dy)) {
-
-      dy = 650;
-
+      dy = 700;
     }
 
 
     if (dy > 1500) {
-
       dy = 1500;
-
     }
 
 
     if (dy < -1500) {
-
       dy = -1500;
-
     }
 
 
     try {
-
       const session =
         sessions.get(id);
 
@@ -972,31 +932,40 @@ app.get(
 
 
       await page.evaluate(
-        (amount) => {
-
-          window.scrollBy({
-            top: amount,
-            left: 0,
-            behavior: "auto"
-          });
-
+        amount => {
+          window.scrollBy(
+            0,
+            amount
+          );
         },
         dy
       );
 
 
       await page.waitForTimeout(
-        100
+        350
       );
 
 
-      await makeScreenshot(
-        page,
-        res
+      console.log(
+        "Rolagem:",
+        dy
+      );
+
+
+      const image =
+        await page.screenshot({
+          type: "png",
+          fullPage: false
+        });
+
+
+      sendImage(
+        res,
+        image
       );
 
     } catch (err) {
-
       console.error(
         "scroll error:",
         err
@@ -1008,9 +977,7 @@ app.get(
         .send(
           "Falha ao rolar"
         );
-
     }
-
   }
 );
 
@@ -1022,7 +989,6 @@ app.get(
 app.get(
   "/v5/top",
   async (req, res) => {
-
     const id =
       String(
         req.query.session || ""
@@ -1033,18 +999,15 @@ app.get(
       !validSession(id) ||
       !sessions.has(id)
     ) {
-
       return res
         .status(404)
         .send(
           "Sessao nao encontrada"
         );
-
     }
 
 
     try {
-
       const session =
         sessions.get(id);
 
@@ -1055,43 +1018,55 @@ app.get(
 
       await session.page.evaluate(
         () => {
-
           window.scrollTo(
             0,
             0
           );
-
         }
       );
 
 
-      await makeScreenshot(
-        session.page,
-        res
+      await session.page.waitForTimeout(
+        250
       );
 
-    } catch {
+
+      const image =
+        await session.page.screenshot({
+          type: "png",
+          fullPage: false
+        });
+
+
+      sendImage(
+        res,
+        image
+      );
+
+    } catch (err) {
+      console.error(
+        "top error:",
+        err
+      );
+
 
       res
         .status(502)
         .send(
-          "Falha"
+          "Falha ao ir para o topo"
         );
-
     }
-
   }
 );
 
 
 /* =========================================================
-   FIM DA PAGINA
+   FIM
 ========================================================= */
 
 app.get(
   "/v5/bottom",
   async (req, res) => {
-
     const id =
       String(
         req.query.session || ""
@@ -1102,18 +1077,15 @@ app.get(
       !validSession(id) ||
       !sessions.has(id)
     ) {
-
       return res
         .status(404)
         .send(
           "Sessao nao encontrada"
         );
-
     }
 
 
     try {
-
       const session =
         sessions.get(id);
 
@@ -1124,42 +1096,54 @@ app.get(
 
       await session.page.evaluate(
         () => {
-
           window.scrollTo(
             0,
             document.documentElement.scrollHeight
           );
-
         }
       );
 
 
-      await makeScreenshot(
-        session.page,
-        res
+      await session.page.waitForTimeout(
+        250
       );
 
-    } catch {
+
+      const image =
+        await session.page.screenshot({
+          type: "png",
+          fullPage: false
+        });
+
+
+      sendImage(
+        res,
+        image
+      );
+
+    } catch (err) {
+      console.error(
+        "bottom error:",
+        err
+      );
+
 
       res
         .status(502)
         .send(
-          "Falha"
+          "Falha ao ir para o final"
         );
-
     }
-
   }
 );
 
 
 /* =========================================================
-   LIMPEZA
+   LIMPEZA DE SESSOES
 ========================================================= */
 
 setInterval(
   async () => {
-
     const now =
       Date.now();
 
@@ -1168,29 +1152,20 @@ setInterval(
       const [id, session]
       of sessions
     ) {
-
       if (
         now - session.last >
         30 * 60 * 1000
       ) {
-
         try {
-
           await session
             .context
             .close();
-
         } catch {}
 
 
-        sessions.delete(
-          id
-        );
-
+        sessions.delete(id);
       }
-
     }
-
   },
   60000
 );
@@ -1204,11 +1179,9 @@ app.listen(
   PORT,
   "0.0.0.0",
   () => {
-
     console.log(
-      "Navegador Roku V5 iniciado na porta " +
+      "Navegador Roku V5 Melhorado iniciado na porta " +
       PORT
     );
-
   }
 );
