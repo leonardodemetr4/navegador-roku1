@@ -30,6 +30,7 @@ async function createPage() {
       width: 1280,
       height: 720
     },
+
     userAgent:
       "Mozilla/5.0 (X11; Linux x86_64) " +
       "AppleWebKit/537.36 (KHTML, like Gecko) " +
@@ -73,7 +74,9 @@ function sendImage(res, image) {
 }
 
 
-/* PÁGINA PRINCIPAL */
+/* =========================
+   PÁGINA PRINCIPAL
+========================= */
 
 app.get("/", (_req, res) => {
   res.send(
@@ -83,17 +86,21 @@ app.get("/", (_req, res) => {
 });
 
 
-/* TESTE */
+/* =========================
+   TESTE DO SERVIDOR
+========================= */
 
 app.get("/health", (_req, res) => {
   res.json({
     ok: true,
-    service: "navegador-roku-v4-click-fixed"
+    service: "navegador-roku-v4-click"
   });
 });
 
 
-/* SNAPSHOT SIMPLES */
+/* =========================
+   SNAPSHOT SIMPLES
+========================= */
 
 app.get("/snapshot-image", async (req, res) => {
 
@@ -112,94 +119,10 @@ app.get("/snapshot-image", async (req, res) => {
 
   try {
 
-    const result = await createPage();
-
-    context = result.context;
-
-    const page = result.page;
-
-    await page.goto(
-      url.toString(),
-      {
-        waitUntil: "domcontentloaded",
-        timeout: 30000
-      }
-    );
-
-    await page.waitForTimeout(1200);
-
-    const image =
-      await page.screenshot({
-        type: "png",
-        fullPage: false
-      });
-
-    sendImage(res, image);
-
-  } catch (err) {
-
-    console.error(
-      "snapshot error:",
-      err
-    );
-
-    res
-      .status(502)
-      .send("Falha ao abrir pagina");
-
-  } finally {
-
-    if (context) {
-      try {
-        await context.close();
-      } catch {}
-    }
-  }
-});
-
-
-/* ABRE UMA PÁGINA E CRIA A SESSÃO */
-
-app.get("/v3/open", async (req, res) => {
-
-  const id =
-    String(req.query.session || "").trim();
-
-  const raw =
-    String(req.query.url || "").trim();
-
-  if (!validSession(id)) {
-    return res
-      .status(400)
-      .send("Sessao invalida");
-  }
-
-  const url = validUrl(raw);
-
-  if (!url) {
-    return res
-      .status(400)
-      .send("URL invalida");
-  }
-
-  try {
-
-    if (sessions.has(id)) {
-
-      try {
-        await sessions
-          .get(id)
-          .context
-          .close();
-      } catch {}
-
-      sessions.delete(id);
-    }
-
     const result =
       await createPage();
 
-    const context =
+    context =
       result.context;
 
     const page =
@@ -213,13 +136,9 @@ app.get("/v3/open", async (req, res) => {
       }
     );
 
-    await page.waitForTimeout(1200);
-
-    sessions.set(id, {
-      context,
-      page,
-      last: Date.now()
-    });
+    await page.waitForTimeout(
+      1200
+    );
 
     const image =
       await page.screenshot({
@@ -227,199 +146,131 @@ app.get("/v3/open", async (req, res) => {
         fullPage: false
       });
 
-    sendImage(res, image);
+    sendImage(
+      res,
+      image
+    );
 
   } catch (err) {
 
     console.error(
-      "v3 open error:",
+      "snapshot error:",
       err
     );
 
     res
       .status(502)
-      .send("Falha ao abrir pagina");
+      .send(
+        "Falha ao abrir pagina"
+      );
+
+  } finally {
+
+    if (context) {
+
+      try {
+        await context.close();
+      } catch {}
+
+    }
   }
 });
 
 
-/* CLIQUE CORRIGIDO PARA A V4.1 */
+/* =========================
+   ABRIR PÁGINA / SESSÃO
+========================= */
 
-app.get("/v3/click", async (req, res) => {
+app.get("/v3/open", async (req, res) => {
 
   const id =
-    String(req.query.session || "").trim();
+    String(
+      req.query.session || ""
+    ).trim();
 
-  if (
-    !validSession(id) ||
-    !sessions.has(id)
-  ) {
-    return res
-      .status(404)
-      .send("Sessao nao encontrada");
-  }
+  const raw =
+    String(
+      req.query.url || ""
+    ).trim();
 
-  const receivedX =
-    Number(req.query.x);
+  if (!validSession(id)) {
 
-  const receivedY =
-    Number(req.query.y);
-
-  if (
-    !Number.isFinite(receivedX) ||
-    !Number.isFinite(receivedY)
-  ) {
     return res
       .status(400)
-      .send("Coordenadas invalidas");
+      .send(
+        "Sessao invalida"
+      );
+  }
+
+  const url =
+    validUrl(raw);
+
+  if (!url) {
+
+    return res
+      .status(400)
+      .send(
+        "URL invalida"
+      );
   }
 
   try {
 
-    const session =
-      sessions.get(id);
-
-    const page =
-      session.page;
-
-    session.last =
-      Date.now();
-
-
     /*
-      CORREÇÃO V4.1
-
-      A captura original é 1280x720.
-
-      Na Roku ela entra numa área
-      1210x505 usando scaleToFit.
-
-      Isso cria aproximadamente
-      156 pixels de margem lateral.
-
-      Aqui convertemos novamente
-      para a posição verdadeira
-      da página Chromium.
+      Se já existe uma sessão
+      com esse nome, fecha primeiro.
     */
 
-    let x =
-      (
-        receivedX * 1210 -
-        156 * 1280
-      ) / 898;
+    if (sessions.has(id)) {
 
-    let y =
-      receivedY;
+      try {
 
+        await sessions
+          .get(id)
+          .context
+          .close();
 
-    x =
-      Math.round(x);
+      } catch {}
 
-    y =
-      Math.round(y);
-
-
-    if (x < 0) x = 0;
-    if (x > 1279) x = 1279;
-
-    if (y < 0) y = 0;
-    if (y > 719) y = 719;
-
-
-    console.log(
-      "Clique recebido:",
-      receivedX,
-      receivedY,
-      "-> corrigido:",
-      x,
-      y
-    );
-
-
-    /*
-      Primeiro procura um link,
-      botão ou outro elemento
-      clicável exatamente no ponto.
-    */
-
-    const clickResult =
-      await page.evaluate(
-        ({ x, y }) => {
-
-          let el =
-            document.elementFromPoint(
-              x,
-              y
-            );
-
-          if (!el) {
-            return false;
-          }
-
-          let current = el;
-
-          for (
-            let i = 0;
-            i < 8 && current;
-            i++
-          ) {
-
-            const tag =
-              current.tagName
-                ? current.tagName.toLowerCase()
-                : "";
-
-            const role =
-              current.getAttribute
-                ? current.getAttribute("role")
-                : null;
-
-            const clickable =
-              tag === "a" ||
-              tag === "button" ||
-              tag === "input" ||
-              role === "button" ||
-              role === "link" ||
-              typeof current.onclick === "function";
-
-            if (clickable) {
-
-              current.click();
-
-              return true;
-            }
-
-            current =
-              current.parentElement;
-          }
-
-          return false;
-
-        },
-        { x, y }
-      );
-
-
-    /*
-      Se não encontrou um elemento
-      clicável, faz clique físico.
-    */
-
-    if (!clickResult) {
-
-      await page.mouse.click(
-        x,
-        y
-      );
+      sessions.delete(id);
     }
 
 
-    /*
-      Espera a navegação,
-      JavaScript ou atualização.
-    */
+    const result =
+      await createPage();
 
-    await page.waitForTimeout(1500);
+    const context =
+      result.context;
+
+    const page =
+      result.page;
+
+
+    await page.goto(
+      url.toString(),
+      {
+        waitUntil:
+          "domcontentloaded",
+
+        timeout:
+          30000
+      }
+    );
+
+
+    await page.waitForTimeout(
+      1200
+    );
+
+
+    sessions.set(
+      id,
+      {
+        context,
+        page,
+        last: Date.now()
+      }
+    );
 
 
     const image =
@@ -434,6 +285,370 @@ app.get("/v3/click", async (req, res) => {
       image
     );
 
+
+  } catch (err) {
+
+    console.error(
+      "v3 open error:",
+      err
+    );
+
+    res
+      .status(502)
+      .send(
+        "Falha ao abrir pagina"
+      );
+  }
+});
+
+
+/* =========================
+   CLIQUE INTELIGENTE
+========================= */
+
+app.get("/v3/click", async (req, res) => {
+
+  const id =
+    String(
+      req.query.session || ""
+    ).trim();
+
+
+  if (
+    !validSession(id) ||
+    !sessions.has(id)
+  ) {
+
+    return res
+      .status(404)
+      .send(
+        "Sessao nao encontrada"
+      );
+  }
+
+
+  const receivedX =
+    Number(
+      req.query.x
+    );
+
+  const receivedY =
+    Number(
+      req.query.y
+    );
+
+
+  if (
+    !Number.isFinite(receivedX) ||
+    !Number.isFinite(receivedY)
+  ) {
+
+    return res
+      .status(400)
+      .send(
+        "Coordenadas invalidas"
+      );
+  }
+
+
+  try {
+
+    const session =
+      sessions.get(id);
+
+    const page =
+      session.page;
+
+    session.last =
+      Date.now();
+
+
+    /*
+      Mantém as coordenadas
+      dentro da tela Chromium.
+    */
+
+    const x =
+      Math.max(
+        0,
+        Math.min(
+          1279,
+          Math.round(
+            receivedX
+          )
+        )
+      );
+
+
+    const y =
+      Math.max(
+        0,
+        Math.min(
+          719,
+          Math.round(
+            receivedY
+          )
+        )
+      );
+
+
+    console.log(
+      "Cursor recebido:",
+      x,
+      y
+    );
+
+
+    /*
+      Procura todos os elementos
+      que normalmente podem
+      receber clique.
+    */
+
+    const result =
+      await page.evaluate(
+        ({ x, y }) => {
+
+          const selector =
+            [
+              "a",
+              "button",
+              "input",
+              "select",
+              "textarea",
+              "[role='button']",
+              "[role='link']",
+              "[onclick]"
+            ].join(",");
+
+
+          const elements =
+            Array.from(
+              document
+                .querySelectorAll(
+                  selector
+                )
+            );
+
+
+          let best =
+            null;
+
+          let bestDistance =
+            Infinity;
+
+          let bestInfo =
+            null;
+
+
+          for (
+            const el
+            of elements
+          ) {
+
+            const rect =
+              el.getBoundingClientRect();
+
+
+            /*
+              Ignora elementos
+              invisíveis.
+            */
+
+            if (
+              rect.width <= 0 ||
+              rect.height <= 0
+            ) {
+              continue;
+            }
+
+
+            const style =
+              window
+                .getComputedStyle(el);
+
+
+            if (
+              style.display === "none" ||
+              style.visibility === "hidden" ||
+              Number(style.opacity) === 0
+            ) {
+              continue;
+            }
+
+
+            /*
+              Calcula o ponto
+              do elemento mais
+              próximo do cursor.
+            */
+
+            const nearestX =
+              Math.max(
+                rect.left,
+                Math.min(
+                  x,
+                  rect.right
+                )
+              );
+
+
+            const nearestY =
+              Math.max(
+                rect.top,
+                Math.min(
+                  y,
+                  rect.bottom
+                )
+              );
+
+
+            const dx =
+              nearestX - x;
+
+            const dy =
+              nearestY - y;
+
+
+            const distance =
+              Math.sqrt(
+                dx * dx +
+                dy * dy
+              );
+
+
+            if (
+              distance <
+              bestDistance
+            ) {
+
+              bestDistance =
+                distance;
+
+              best =
+                el;
+
+              bestInfo = {
+                tag:
+                  el.tagName,
+
+                text:
+                  (
+                    el.innerText ||
+                    el.value ||
+                    ""
+                  )
+                  .trim()
+                  .slice(
+                    0,
+                    80
+                  ),
+
+                distance:
+                  Math.round(
+                    distance
+                  )
+              };
+            }
+          }
+
+
+          /*
+            Aceita o elemento
+            clicável mais próximo
+            dentro de 180 pixels.
+          */
+
+          if (
+            best &&
+            bestDistance <= 180
+          ) {
+
+            best.scrollIntoView({
+              block:
+                "center",
+
+              inline:
+                "center",
+
+              behavior:
+                "instant"
+            });
+
+
+            best.click();
+
+
+            return {
+              clicked:
+                true,
+
+              element:
+                bestInfo
+            };
+          }
+
+
+          return {
+            clicked:
+              false,
+
+            element:
+              bestInfo
+          };
+
+        },
+        { x, y }
+      );
+
+
+    console.log(
+      "Resultado clique:",
+      result
+    );
+
+
+    /*
+      Se não encontrou nenhum
+      elemento clicável próximo,
+      faz um clique físico.
+    */
+
+    if (!result.clicked) {
+
+      await page.mouse.click(
+        x,
+        y
+      );
+    }
+
+
+    /*
+      Dá tempo para a página
+      navegar ou atualizar.
+    */
+
+    await page.waitForTimeout(
+      1800
+    );
+
+
+    const image =
+      await page.screenshot({
+        type:
+          "png",
+
+        fullPage:
+          false
+      });
+
+
+    sendImage(
+      res,
+      image
+    );
+
+
   } catch (err) {
 
     console.error(
@@ -441,44 +656,65 @@ app.get("/v3/click", async (req, res) => {
       err
     );
 
+
     res
       .status(502)
-      .send("Falha no clique");
+      .send(
+        "Falha no clique"
+      );
   }
 });
 
 
-/* LIMPA SESSÕES ANTIGAS */
+/* =========================
+   LIMPEZA DAS SESSÕES
+========================= */
 
-setInterval(async () => {
+setInterval(
+  async () => {
 
-  const now =
-    Date.now();
+    const now =
+      Date.now();
 
-  for (
-    const [id, session]
-    of sessions
-  ) {
 
-    if (
-      now - session.last >
-      30 * 60 * 1000
+    for (
+      const [id, session]
+      of sessions
     ) {
 
-      try {
+      /*
+        Fecha sessões paradas
+        por mais de 30 minutos.
+      */
 
-        await session
-          .context
-          .close();
+      if (
+        now - session.last >
+        30 * 60 * 1000
+      ) {
 
-      } catch {}
+        try {
 
-      sessions.delete(id);
+          await session
+            .context
+            .close();
+
+        } catch {}
+
+
+        sessions.delete(
+          id
+        );
+      }
     }
-  }
 
-}, 60000);
+  },
+  60000
+);
 
+
+/* =========================
+   INICIAR SERVIDOR
+========================= */
 
 app.listen(
   PORT,
@@ -486,7 +722,7 @@ app.listen(
   () => {
 
     console.log(
-      "Navegador Roku V4 clique corrigido na porta " +
+      "Navegador Roku V4.1 iniciado na porta " +
       PORT
     );
   }
