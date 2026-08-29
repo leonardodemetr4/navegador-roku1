@@ -57,7 +57,6 @@ function validUrl(raw) {
     }
 
     return url;
-
   } catch {
     return null;
   }
@@ -67,25 +66,21 @@ function validSession(id) {
   return /^[A-Za-z0-9_-]{1,40}$/.test(id || "");
 }
 
-function sendImage(res, image, pageUrl = "") {
+function sendImage(res, image) {
   res.set(
     "Cache-Control",
-    "no-store, no-cache, must-revalidate, proxy-revalidate"
+    "no-store, no-cache, must-revalidate"
   );
 
   res.set("Pragma", "no-cache");
   res.set("Expires", "0");
 
-  if (pageUrl) {
-    res.set("X-Page-Url", pageUrl);
-  }
-
   res.type("png");
   res.send(image);
 }
 
-async function screenshot(page, res) {
-  await page.waitForTimeout(700);
+async function makeScreenshot(page, res) {
+  await page.waitForTimeout(150);
 
   const image =
     await page.screenshot({
@@ -93,11 +88,7 @@ async function screenshot(page, res) {
       fullPage: false
     });
 
-  sendImage(
-    res,
-    image,
-    page.url()
-  );
+  sendImage(res, image);
 }
 
 
@@ -107,798 +98,542 @@ async function screenshot(page, res) {
 
 app.get("/", (_req, res) => {
   res.send(
-    "<h1>Navegador Roku V4.4</h1>" +
-    "<p>Servidor Docker online.</p>"
+    "<h1>Navegador Roku V4.3 Plus</h1>" +
+    "<p>Servidor online.</p>"
   );
 });
-
 
 app.get("/health", (_req, res) => {
   res.json({
     ok: true,
-    service: "navegador-roku-v4.4"
+    service: "roku-v43-plus"
   });
 });
-
-
-/* =========================
-   SNAPSHOT SIMPLES
-========================= */
-
-app.get(
-  "/snapshot-image",
-  async (req, res) => {
-
-    const raw =
-      String(
-        req.query.url || ""
-      ).trim();
-
-    const url =
-      validUrl(raw);
-
-    if (!url) {
-      return res
-        .status(400)
-        .send("URL invalida");
-    }
-
-    let context;
-
-    try {
-
-      const result =
-        await createPage();
-
-      context =
-        result.context;
-
-      const page =
-        result.page;
-
-      await page.goto(
-        url.toString(),
-        {
-          waitUntil:
-            "domcontentloaded",
-
-          timeout:
-            30000
-        }
-      );
-
-      await screenshot(
-        page,
-        res
-      );
-
-    } catch (err) {
-
-      console.error(
-        "snapshot error:",
-        err
-      );
-
-      res
-        .status(502)
-        .send(
-          "Falha ao abrir pagina"
-        );
-
-    } finally {
-
-      if (context) {
-
-        try {
-          await context.close();
-        } catch {}
-
-      }
-    }
-  }
-);
 
 
 /* =========================
    ABRIR PÁGINA
 ========================= */
 
-app.get(
-  "/v3/open",
-  async (req, res) => {
+app.get("/v3/open", async (req, res) => {
 
-    const id =
-      String(
-        req.query.session || ""
-      ).trim();
+  const id =
+    String(
+      req.query.session || ""
+    ).trim();
 
-    const raw =
-      String(
-        req.query.url || ""
-      ).trim();
+  const raw =
+    String(
+      req.query.url || ""
+    ).trim();
 
-
-    if (!validSession(id)) {
-
-      return res
-        .status(400)
-        .send(
-          "Sessao invalida"
-        );
-    }
-
-
-    const url =
-      validUrl(raw);
-
-
-    if (!url) {
-
-      return res
-        .status(400)
-        .send(
-          "URL invalida"
-        );
-    }
-
-
-    try {
-
-      if (
-        sessions.has(id)
-      ) {
-
-        try {
-
-          await sessions
-            .get(id)
-            .context
-            .close();
-
-        } catch {}
-
-        sessions.delete(id);
-      }
-
-
-      const result =
-        await createPage();
-
-
-      const context =
-        result.context;
-
-
-      const page =
-        result.page;
-
-
-      await page.goto(
-        url.toString(),
-        {
-          waitUntil:
-            "domcontentloaded",
-
-          timeout:
-            30000
-        }
-      );
-
-
-      sessions.set(
-        id,
-        {
-          context,
-          page,
-          last: Date.now()
-        }
-      );
-
-
-      console.log(
-        "Pagina aberta:",
-        page.url()
-      );
-
-
-      await screenshot(
-        page,
-        res
-      );
-
-
-    } catch (err) {
-
-      console.error(
-        "v3 open error:",
-        err
-      );
-
-
-      res
-        .status(502)
-        .send(
-          "Falha ao abrir pagina"
-        );
-    }
+  if (!validSession(id)) {
+    return res
+      .status(400)
+      .send("Sessao invalida");
   }
-);
+
+  const url =
+    validUrl(raw);
+
+  if (!url) {
+    return res
+      .status(400)
+      .send("URL invalida");
+  }
+
+  try {
+
+    if (sessions.has(id)) {
+
+      try {
+        await sessions
+          .get(id)
+          .context
+          .close();
+      } catch {}
+
+      sessions.delete(id);
+    }
+
+    const result =
+      await createPage();
+
+    const context =
+      result.context;
+
+    const page =
+      result.page;
+
+    await page.goto(
+      url.toString(),
+      {
+        waitUntil: "domcontentloaded",
+        timeout: 30000
+      }
+    );
+
+    sessions.set(
+      id,
+      {
+        context,
+        page,
+        last: Date.now()
+      }
+    );
+
+    console.log(
+      "Pagina aberta:",
+      page.url()
+    );
+
+    await makeScreenshot(
+      page,
+      res
+    );
+
+  } catch (err) {
+
+    console.error(
+      "open error:",
+      err
+    );
+
+    res
+      .status(502)
+      .send("Falha ao abrir pagina");
+  }
+});
 
 
 /* =========================
    CLIQUE
 ========================= */
 
-app.get(
-  "/v3/click",
-  async (req, res) => {
+app.get("/v3/click", async (req, res) => {
 
-    const id =
-      String(
-        req.query.session || ""
-      ).trim();
+  const id =
+    String(
+      req.query.session || ""
+    ).trim();
 
+  if (
+    !validSession(id) ||
+    !sessions.has(id)
+  ) {
+    return res
+      .status(404)
+      .send("Sessao nao encontrada");
+  }
 
-    if (
-      !validSession(id) ||
-      !sessions.has(id)
-    ) {
+  const receivedX =
+    Number(req.query.x);
 
-      return res
-        .status(404)
-        .send(
-          "Sessao nao encontrada"
-        );
-    }
+  const receivedY =
+    Number(req.query.y);
 
+  if (
+    !Number.isFinite(receivedX) ||
+    !Number.isFinite(receivedY)
+  ) {
+    return res
+      .status(400)
+      .send("Coordenadas invalidas");
+  }
 
-    const receivedX =
-      Number(
-        req.query.x
+  try {
+
+    const session =
+      sessions.get(id);
+
+    const page =
+      session.page;
+
+    session.last =
+      Date.now();
+
+    const x =
+      Math.max(
+        0,
+        Math.min(
+          1279,
+          Math.round(receivedX)
+        )
       );
 
-
-    const receivedY =
-      Number(
-        req.query.y
+    const y =
+      Math.max(
+        0,
+        Math.min(
+          719,
+          Math.round(receivedY)
+        )
       );
 
+    console.log(
+      "Cursor recebido:",
+      x,
+      y
+    );
 
-    if (
-      !Number.isFinite(receivedX) ||
-      !Number.isFinite(receivedY)
-    ) {
+    const result =
+      await page.evaluate(
+        ({ x, y }) => {
 
-      return res
-        .status(400)
-        .send(
-          "Coordenadas invalidas"
-        );
-    }
+          const selector =
+            [
+              "a",
+              "button",
+              "input",
+              "select",
+              "textarea",
+              "[role='button']",
+              "[role='link']",
+              "[onclick]"
+            ].join(",");
 
+          const elements =
+            Array.from(
+              document.querySelectorAll(
+                selector
+              )
+            );
 
-    try {
+          let best = null;
+          let bestDistance = Infinity;
 
-      const session =
-        sessions.get(id);
+          for (const el of elements) {
 
+            const rect =
+              el.getBoundingClientRect();
 
-      const page =
-        session.page;
+            if (
+              rect.width <= 0 ||
+              rect.height <= 0
+            ) {
+              continue;
+            }
 
+            const style =
+              window.getComputedStyle(el);
 
-      session.last =
-        Date.now();
+            if (
+              style.display === "none" ||
+              style.visibility === "hidden" ||
+              Number(style.opacity) === 0
+            ) {
+              continue;
+            }
 
-
-      const x =
-        Math.max(
-          0,
-          Math.min(
-            1279,
-            Math.round(
-              receivedX
-            )
-          )
-        );
-
-
-      const y =
-        Math.max(
-          0,
-          Math.min(
-            719,
-            Math.round(
-              receivedY
-            )
-          )
-        );
-
-
-      console.log(
-        "Cursor recebido:",
-        x,
-        y
-      );
-
-
-      const result =
-        await page.evaluate(
-          ({ x, y }) => {
-
-            const selector =
-              [
-                "a",
-                "button",
-                "input",
-                "select",
-                "textarea",
-                "[role='button']",
-                "[role='link']",
-                "[onclick]"
-              ].join(",");
-
-
-            const elements =
-              Array.from(
-                document.querySelectorAll(
-                  selector
+            const nearestX =
+              Math.max(
+                rect.left,
+                Math.min(
+                  x,
+                  rect.right
                 )
               );
 
+            const nearestY =
+              Math.max(
+                rect.top,
+                Math.min(
+                  y,
+                  rect.bottom
+                )
+              );
 
-            let best =
-              null;
+            const dx =
+              nearestX - x;
 
+            const dy =
+              nearestY - y;
 
-            let bestDistance =
-              Infinity;
-
-
-            for (
-              const el
-              of elements
-            ) {
-
-              const rect =
-                el.getBoundingClientRect();
-
-
-              if (
-                rect.width <= 0 ||
-                rect.height <= 0
-              ) {
-                continue;
-              }
-
-
-              const style =
-                window.getComputedStyle(
-                  el
-                );
-
-
-              if (
-                style.display === "none" ||
-                style.visibility === "hidden" ||
-                Number(style.opacity) === 0
-              ) {
-                continue;
-              }
-
-
-              const nearestX =
-                Math.max(
-                  rect.left,
-                  Math.min(
-                    x,
-                    rect.right
-                  )
-                );
-
-
-              const nearestY =
-                Math.max(
-                  rect.top,
-                  Math.min(
-                    y,
-                    rect.bottom
-                  )
-                );
-
-
-              const dx =
-                nearestX - x;
-
-
-              const dy =
-                nearestY - y;
-
-
-              const distance =
-                Math.sqrt(
-                  dx * dx +
-                  dy * dy
-                );
-
-
-              if (
-                distance <
-                bestDistance
-              ) {
-
-                bestDistance =
-                  distance;
-
-
-                best =
-                  el;
-              }
-            }
-
+            const distance =
+              Math.sqrt(
+                dx * dx +
+                dy * dy
+              );
 
             if (
-              !best ||
-              bestDistance > 180
+              distance <
+              bestDistance
             ) {
+              bestDistance =
+                distance;
 
-              return {
-                found:
-                  false
-              };
+              best =
+                el;
             }
+          }
 
-
-            const link =
-              best.tagName &&
-              best.tagName.toLowerCase() === "a"
-
-                ? best
-
-                : best.closest(
-                    "a"
-                  );
-
-
-            if (
-              link &&
-              link.href
-            ) {
-
-              return {
-
-                found:
-                  true,
-
-                type:
-                  "link",
-
-                href:
-                  link.href,
-
-                text:
-                  (
-                    link.innerText ||
-                    ""
-                  )
-                  .trim()
-                  .slice(
-                    0,
-                    100
-                  ),
-
-                distance:
-                  Math.round(
-                    bestDistance
-                  )
-              };
-            }
-
-
+          if (
+            !best ||
+            bestDistance > 180
+          ) {
             return {
+              found: false
+            };
+          }
 
-              found:
-                true,
+          const link =
+            best.tagName &&
+            best.tagName.toLowerCase() === "a"
+              ? best
+              : best.closest("a");
 
-              type:
-                "click",
-
+          if (
+            link &&
+            link.href
+          ) {
+            return {
+              found: true,
+              type: "link",
+              href: link.href,
+              text:
+                (
+                  link.innerText ||
+                  ""
+                )
+                .trim()
+                .slice(0, 100),
               distance:
                 Math.round(
                   bestDistance
                 )
             };
-
-          },
-          {
-            x,
-            y
           }
-        );
 
+          return {
+            found: true,
+            type: "click",
+            distance:
+              Math.round(
+                bestDistance
+              )
+          };
 
-      console.log(
-        "Resultado clique:",
-        result
-      );
-
-
-      if (
-        result.found &&
-        result.type === "link" &&
-        result.href
-      ) {
-
-        const linkUrl =
-          validUrl(
-            result.href
-          );
-
-
-        if (linkUrl) {
-
-          console.log(
-            "Abrindo link:",
-            linkUrl.toString()
-          );
-
-
-          await page.goto(
-            linkUrl.toString(),
-            {
-              waitUntil:
-                "domcontentloaded",
-
-              timeout:
-                30000
-            }
-          );
-        }
-
-      } else {
-
-        await page.mouse.click(
+        },
+        {
           x,
           y
+        }
+      );
+
+    console.log(
+      "Resultado clique:",
+      result
+    );
+
+    if (
+      result.found &&
+      result.type === "link" &&
+      result.href
+    ) {
+
+      const linkUrl =
+        validUrl(
+          result.href
+        );
+
+      if (linkUrl) {
+
+        console.log(
+          "Abrindo link:",
+          linkUrl.toString()
+        );
+
+        await page.goto(
+          linkUrl.toString(),
+          {
+            waitUntil:
+              "domcontentloaded",
+            timeout:
+              30000
+          }
         );
       }
 
+    } else {
 
-      console.log(
-        "Pagina atual:",
-        page.url()
+      await page.mouse.click(
+        x,
+        y
       );
-
-
-      await screenshot(
-        page,
-        res
-      );
-
-
-    } catch (err) {
-
-      console.error(
-        "click error:",
-        err
-      );
-
-
-      res
-        .status(502)
-        .send(
-          "Falha no clique"
-        );
     }
+
+    console.log(
+      "Pagina atual:",
+      page.url()
+    );
+
+    await makeScreenshot(
+      page,
+      res
+    );
+
+  } catch (err) {
+
+    console.error(
+      "click error:",
+      err
+    );
+
+    res
+      .status(502)
+      .send("Falha no clique");
   }
-);
+});
 
 
 /* =========================
    VOLTAR
 ========================= */
 
-app.get(
-  "/v4/back",
-  async (req, res) => {
+app.get("/v4/back", async (req, res) => {
 
-    const id =
-      String(
-        req.query.session || ""
-      ).trim();
+  const id =
+    String(
+      req.query.session || ""
+    ).trim();
 
-
-    if (
-      !validSession(id) ||
-      !sessions.has(id)
-    ) {
-
-      return res
-        .status(404)
-        .send(
-          "Sessao nao encontrada"
-        );
-    }
-
-
-    try {
-
-      const session =
-        sessions.get(id);
-
-
-      const page =
-        session.page;
-
-
-      session.last =
-        Date.now();
-
-
-      await page
-        .goBack({
-          waitUntil:
-            "domcontentloaded",
-
-          timeout:
-            15000
-        })
-        .catch(
-          () => null
-        );
-
-
-      console.log(
-        "Voltar ->",
-        page.url()
-      );
-
-
-      await screenshot(
-        page,
-        res
-      );
-
-
-    } catch (err) {
-
-      console.error(
-        "back error:",
-        err
-      );
-
-
-      res
-        .status(502)
-        .send(
-          "Falha ao voltar"
-        );
-    }
+  if (
+    !validSession(id) ||
+    !sessions.has(id)
+  ) {
+    return res
+      .status(404)
+      .send("Sessao nao encontrada");
   }
-);
+
+  try {
+
+    const session =
+      sessions.get(id);
+
+    const page =
+      session.page;
+
+    session.last =
+      Date.now();
+
+    await page
+      .goBack({
+        waitUntil:
+          "domcontentloaded",
+        timeout:
+          15000
+      })
+      .catch(() => null);
+
+    console.log(
+      "Voltou para:",
+      page.url()
+    );
+
+    await makeScreenshot(
+      page,
+      res
+    );
+
+  } catch (err) {
+
+    console.error(
+      "back error:",
+      err
+    );
+
+    res
+      .status(502)
+      .send("Falha ao voltar");
+  }
+});
 
 
 /* =========================
    ROLAGEM
 ========================= */
 
-app.get(
-  "/v4/scroll",
-  async (req, res) => {
+app.get("/v4/scroll", async (req, res) => {
 
-    const id =
-      String(
-        req.query.session || ""
-      ).trim();
+  const id =
+    String(
+      req.query.session || ""
+    ).trim();
 
-
-    if (
-      !validSession(id) ||
-      !sessions.has(id)
-    ) {
-
-      return res
-        .status(404)
-        .send(
-          "Sessao nao encontrada"
-        );
-    }
-
-
-    let dy =
-      Number(
-        req.query.dy
-      );
-
-
-    if (
-      !Number.isFinite(dy)
-    ) {
-
-      dy =
-        430;
-    }
-
-
-    dy =
-      Math.max(
-        -1000,
-        Math.min(
-          1000,
-          Math.round(
-            dy
-          )
-        )
-      );
-
-
-    try {
-
-      const session =
-        sessions.get(id);
-
-
-      const page =
-        session.page;
-
-
-      session.last =
-        Date.now();
-
-
-      await page.evaluate(
-        (amount) => {
-
-          window.scrollBy({
-            top:
-              amount,
-
-            left:
-              0,
-
-            behavior:
-              "instant"
-          });
-
-        },
-        dy
-      );
-
-
-      console.log(
-        "Scroll:",
-        dy,
-        "URL:",
-        page.url()
-      );
-
-
-      await screenshot(
-        page,
-        res
-      );
-
-
-    } catch (err) {
-
-      console.error(
-        "scroll error:",
-        err
-      );
-
-
-      res
-        .status(502)
-        .send(
-          "Falha ao rolar"
-        );
-    }
+  if (
+    !validSession(id) ||
+    !sessions.has(id)
+  ) {
+    return res
+      .status(404)
+      .send("Sessao nao encontrada");
   }
-);
+
+  let dy =
+    Number(req.query.dy);
+
+  if (!Number.isFinite(dy)) {
+    dy = 400;
+  }
+
+  if (dy > 900) {
+    dy = 900;
+  }
+
+  if (dy < -900) {
+    dy = -900;
+  }
+
+  try {
+
+    const session =
+      sessions.get(id);
+
+    const page =
+      session.page;
+
+    session.last =
+      Date.now();
+
+    await page.evaluate(
+      (amount) => {
+
+        window.scrollBy(
+          0,
+          amount
+        );
+
+      },
+      dy
+    );
+
+    console.log(
+      "Rolagem:",
+      dy
+    );
+
+    await makeScreenshot(
+      page,
+      res
+    );
+
+  } catch (err) {
+
+    console.error(
+      "scroll error:",
+      err
+    );
+
+    res
+      .status(502)
+      .send("Falha ao rolar");
+  }
+});
 
 
 /* =========================
-   LIMPEZA DE SESSÕES
+   LIMPAR SESSÕES ANTIGAS
 ========================= */
 
 setInterval(
@@ -906,7 +641,6 @@ setInterval(
 
     const now =
       Date.now();
-
 
     for (
       const [id, session]
@@ -919,17 +653,12 @@ setInterval(
       ) {
 
         try {
-
           await session
             .context
             .close();
-
         } catch {}
 
-
-        sessions.delete(
-          id
-        );
+        sessions.delete(id);
       }
     }
 
@@ -939,7 +668,7 @@ setInterval(
 
 
 /* =========================
-   INICIAR
+   SERVIDOR
 ========================= */
 
 app.listen(
@@ -948,7 +677,7 @@ app.listen(
   () => {
 
     console.log(
-      "Navegador Roku V4.4 iniciado na porta " +
+      "Navegador Roku V4.3 Plus iniciado na porta " +
       PORT
     );
   }
