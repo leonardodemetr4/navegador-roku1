@@ -5,24 +5,40 @@ sub init()
             "address"
         )
 
+
     m.pagePoster =
         m.top.findNode(
             "pagePoster"
         )
+
 
     m.cursor =
         m.top.findNode(
             "cursor"
         )
 
+
     m.cursorShadow =
         m.top.findNode(
             "cursorShadow"
         )
 
+
+    m.cursorCenter =
+        m.top.findNode(
+            "cursorCenter"
+        )
+
+
     m.status =
         m.top.findNode(
             "status"
+        )
+
+
+    m.statusDot =
+        m.top.findNode(
+            "statusDot"
         )
 
 
@@ -31,7 +47,7 @@ sub init()
 
 
     m.session =
-        "roku43plus"
+        "roku_v5"
 
 
     m.currentUrl =
@@ -47,7 +63,7 @@ sub init()
 
 
     m.cy =
-        359
+        354
 
 
     m.imageSerial =
@@ -64,9 +80,23 @@ sub init()
 end sub
 
 
-' ==========================================
+' =========================================================
+' STATUS
+' =========================================================
+
+sub setStatus(
+    text as String
+)
+
+    m.status.text =
+        text
+
+end sub
+
+
+' =========================================================
 ' TECLADO
-' ==========================================
+' =========================================================
 
 sub showKeyboard()
 
@@ -140,7 +170,11 @@ sub onKeyboardButton(
 
             if Left(lower, 7) <> "http://" and Left(lower, 8) <> "https://"
 
-                if Instr(1, value, ".") = 0
+                if Instr(
+                    1,
+                    value,
+                    "."
+                ) = 0
 
                     value =
                         "https://www.bing.com/search?q=" +
@@ -174,9 +208,9 @@ sub onKeyboardButton(
 end sub
 
 
-' ==========================================
-' ABRIR PAGINA
-' ==========================================
+' =========================================================
+' ABRIR
+' =========================================================
 
 sub openPage()
 
@@ -184,13 +218,14 @@ sub openPage()
         m.currentUrl
 
 
-    m.status.text =
+    setStatus(
         "Abrindo pagina..."
+    )
 
 
     requestUrl =
         m.serverBase +
-        "/v3/open?session=" +
+        "/v5/open?session=" +
         m.session
 
 
@@ -207,9 +242,9 @@ sub openPage()
 end sub
 
 
-' ==========================================
+' =========================================================
 ' CLIQUE
-' ==========================================
+' =========================================================
 
 sub clickPage()
 
@@ -225,7 +260,7 @@ sub clickPage()
         Int(
             (m.cy - 120) *
             720 /
-            505
+            490
         )
 
 
@@ -249,13 +284,14 @@ sub clickPage()
     end if
 
 
-    m.status.text =
-        "Clicando..."
+    setStatus(
+        "Abrindo item..."
+    )
 
 
     requestUrl =
         m.serverBase +
-        "/v3/click?session=" +
+        "/v5/click?session=" +
         m.session
 
 
@@ -278,19 +314,20 @@ sub clickPage()
 end sub
 
 
-' ==========================================
+' =========================================================
 ' VOLTAR
-' ==========================================
+' =========================================================
 
 sub goBack()
 
-    m.status.text =
+    setStatus(
         "Voltando..."
+    )
 
 
     requestUrl =
         m.serverBase +
-        "/v4/back?session=" +
+        "/v5/back?session=" +
         m.session
 
 
@@ -301,9 +338,33 @@ sub goBack()
 end sub
 
 
-' ==========================================
+' =========================================================
+' AVANCAR
+' =========================================================
+
+sub goForward()
+
+    setStatus(
+        "Avancando..."
+    )
+
+
+    requestUrl =
+        m.serverBase +
+        "/v5/forward?session=" +
+        m.session
+
+
+    downloadImage(
+        requestUrl
+    )
+
+end sub
+
+
+' =========================================================
 ' ROLAGEM
-' ==========================================
+' =========================================================
 
 sub scrollPage(
     amount as Integer
@@ -311,20 +372,22 @@ sub scrollPage(
 
     if amount > 0
 
-        m.status.text =
-            "Rolando para baixo..."
+        setStatus(
+            "Descendo pagina..."
+        )
 
     else
 
-        m.status.text =
-            "Rolando para cima..."
+        setStatus(
+            "Subindo pagina..."
+        )
 
     end if
 
 
     requestUrl =
         m.serverBase +
-        "/v4/scroll?session=" +
+        "/v5/scroll?session=" +
         m.session
 
 
@@ -341,9 +404,57 @@ sub scrollPage(
 end sub
 
 
-' ==========================================
-' DOWNLOAD DA IMAGEM
-' ==========================================
+' =========================================================
+' IR AO TOPO
+' =========================================================
+
+sub goTop()
+
+    setStatus(
+        "Indo para o topo..."
+    )
+
+
+    requestUrl =
+        m.serverBase +
+        "/v5/top?session=" +
+        m.session
+
+
+    downloadImage(
+        requestUrl
+    )
+
+end sub
+
+
+' =========================================================
+' IR AO FINAL
+' =========================================================
+
+sub goBottom()
+
+    setStatus(
+        "Indo para o final..."
+    )
+
+
+    requestUrl =
+        m.serverBase +
+        "/v5/bottom?session=" +
+        m.session
+
+
+    downloadImage(
+        requestUrl
+    )
+
+end sub
+
+
+' =========================================================
+' DOWNLOAD
+' =========================================================
 
 sub downloadImage(
     requestUrl as String
@@ -396,9 +507,9 @@ sub downloadImage(
 end sub
 
 
-' ==========================================
-' NOVA IMAGEM
-' ==========================================
+' =========================================================
+' IMAGEM PRONTA
+' =========================================================
 
 sub onImageReady(
     e as Object
@@ -414,17 +525,18 @@ sub onImageReady(
             uri
 
 
-        m.status.text =
-            "Pagina carregada"
+        setStatus(
+            "Pagina pronta"
+        )
 
     end if
 
 end sub
 
 
-' ==========================================
+' =========================================================
 ' ERRO
-' ==========================================
+' =========================================================
 
 sub onImageError(
     e as Object
@@ -442,15 +554,16 @@ sub onImageError(
     end if
 
 
-    m.status.text =
+    setStatus(
         errorMessage
+    )
 
 end sub
 
 
-' ==========================================
+' =========================================================
 ' CURSOR
-' ==========================================
+' =========================================================
 
 sub moveCursor(
     dx as Integer,
@@ -480,8 +593,8 @@ sub moveCursor(
     end if
 
 
-    if m.cy > 605 then
-        m.cy = 605
+    if m.cy > 590 then
+        m.cy = 590
     end if
 
 
@@ -494,16 +607,23 @@ sub moveCursor(
 
     m.cursorShadow.translation =
         [
-            m.cx - 4,
-            m.cy + 4
+            m.cx - 3,
+            m.cy + 3
+        ]
+
+
+    m.cursorCenter.translation =
+        [
+            m.cx + 6,
+            m.cy + 6
         ]
 
 end sub
 
 
-' ==========================================
-' CONTROLE REMOTO
-' ==========================================
+' =========================================================
+' CONTROLE
+' =========================================================
 
 function onKeyEvent(
     key as String,
@@ -520,7 +640,7 @@ function onKeyEvent(
     if key = "left"
 
         moveCursor(
-            -30,
+            -32,
             0
         )
 
@@ -530,7 +650,7 @@ function onKeyEvent(
     else if key = "right"
 
         moveCursor(
-            30,
+            32,
             0
         )
 
@@ -541,7 +661,7 @@ function onKeyEvent(
 
         moveCursor(
             0,
-            -26
+            -28
         )
 
         return true
@@ -551,7 +671,7 @@ function onKeyEvent(
 
         moveCursor(
             0,
-            26
+            28
         )
 
         return true
@@ -599,6 +719,13 @@ function onKeyEvent(
     else if key = "replay"
 
         openPage()
+
+        return true
+
+
+    else if key = "play"
+
+        goForward()
 
         return true
 
