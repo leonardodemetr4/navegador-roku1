@@ -1,180 +1,85 @@
 sub init()
 
-    m.address =
-        m.top.findNode(
-            "address"
-        )
+    m.address = m.top.findNode("address")
+    m.pagePoster = m.top.findNode("pagePoster")
+    m.cursor = m.top.findNode("cursor")
+    m.cursorShadow = m.top.findNode("cursorShadow")
+    m.cursorCenter = m.top.findNode("cursorCenter")
+    m.status = m.top.findNode("status")
 
+    m.serverBase = "https://navegador-roku1-1.onrender.com"
+    m.session = "roku_v5_fixed2"
+    m.currentUrl = "https://example.com"
+    m.pendingText = ""
 
-    m.pagePoster =
-        m.top.findNode(
-            "pagePoster"
-        )
+    m.cx = 640
+    m.cy = 354
+    m.imageSerial = 0
 
-
-    m.cursor =
-        m.top.findNode(
-            "cursor"
-        )
-
-
-    m.cursorShadow =
-        m.top.findNode(
-            "cursorShadow"
-        )
-
-
-    m.cursorCenter =
-        m.top.findNode(
-            "cursorCenter"
-        )
-
-
-    m.status =
-        m.top.findNode(
-            "status"
-        )
-
-
-    m.statusDot =
-        m.top.findNode(
-            "statusDot"
-        )
-
-
-    m.serverBase =
-        "https://navegador-roku1-1.onrender.com"
-
-
-    m.session =
-        "roku_v5"
-
-
-    m.currentUrl =
-        "https://example.com"
-
-
-    m.pendingText =
-        ""
-
-
-    m.cx =
-        640
-
-
-    m.cy =
-        354
-
-
-    m.imageSerial =
-        0
-
-
-    m.top.SetFocus(
-        true
-    )
-
+    m.top.SetFocus(true)
 
     openPage()
 
 end sub
 
 
-' =========================================================
-' STATUS
-' =========================================================
+sub setStatus(text as String)
 
-sub setStatus(
-    text as String
-)
-
-    m.status.text =
-        text
+    m.status.text = text
 
 end sub
 
 
-' =========================================================
-' TECLADO
-' =========================================================
-
 sub showKeyboard()
 
-    d =
-        CreateObject(
-            "roSGNode",
-            "KeyboardDialog"
-        )
+    d = CreateObject(
+        "roSGNode",
+        "KeyboardDialog"
+    )
 
+    d.title = "Pesquisar ou digitar endereco"
+    d.text = ""
 
-    d.title =
-        "Pesquisar ou digitar endereco"
-
-
-    d.text =
-        ""
-
-
-    d.buttons =
-        [
-            "Abrir",
-            "Cancelar"
-        ]
-
+    d.buttons = [
+        "Abrir",
+        "Cancelar"
+    ]
 
     d.ObserveField(
         "text",
         "onKeyboardText"
     )
 
-
     d.ObserveField(
         "buttonSelected",
         "onKeyboardButton"
     )
 
-
-    m.top.dialog =
-        d
+    m.top.dialog = d
 
 end sub
 
 
-sub onKeyboardText(
-    e as Object
-)
+sub onKeyboardText(e as Object)
 
-    m.pendingText =
-        e.GetData()
+    m.pendingText = e.GetData()
 
 end sub
 
 
-sub onKeyboardButton(
-    e as Object
-)
+sub onKeyboardButton(e as Object)
 
     if e.GetData() = 0
 
-        value =
-            m.pendingText.Trim()
-
+        value = m.pendingText.Trim()
 
         if value <> ""
 
-            lower =
-                LCase(
-                    value
-                )
-
+            lower = LCase(value)
 
             if Left(lower, 7) <> "http://" and Left(lower, 8) <> "https://"
 
-                if Instr(
-                    1,
-                    value,
-                    "."
-                ) = 0
+                if Instr(1, value, ".") = 0
 
                     value =
                         "https://www.bing.com/search?q=" +
@@ -190,10 +95,7 @@ sub onKeyboardButton(
 
             end if
 
-
-            m.currentUrl =
-                value
-
+            m.currentUrl = value
 
             openPage()
 
@@ -201,39 +103,28 @@ sub onKeyboardButton(
 
     end if
 
-
-    m.top.dialog =
-        invalid
+    m.top.dialog = invalid
 
 end sub
 
 
-' =========================================================
-' ABRIR
-' =========================================================
-
 sub openPage()
 
-    m.address.text =
-        m.currentUrl
-
+    m.address.text = m.currentUrl
 
     setStatus(
         "Abrindo pagina..."
     )
-
 
     requestUrl =
         m.serverBase +
         "/v5/open?session=" +
         m.session
 
-
     requestUrl =
         requestUrl +
         "&url=" +
         m.currentUrl.EncodeUriComponent()
-
 
     downloadImage(
         requestUrl
@@ -241,10 +132,6 @@ sub openPage()
 
 end sub
 
-
-' =========================================================
-' CLIQUE
-' =========================================================
 
 sub clickPage()
 
@@ -255,7 +142,6 @@ sub clickPage()
             1210
         )
 
-
     py =
         Int(
             (m.cy - 120) *
@@ -263,49 +149,40 @@ sub clickPage()
             490
         )
 
-
     if px < 0 then
         px = 0
     end if
-
 
     if py < 0 then
         py = 0
     end if
 
-
     if px > 1279 then
         px = 1279
     end if
-
 
     if py > 719 then
         py = 719
     end if
 
-
     setStatus(
         "Abrindo item..."
     )
-
 
     requestUrl =
         m.serverBase +
         "/v5/click?session=" +
         m.session
 
-
     requestUrl =
         requestUrl +
         "&x=" +
         px.ToStr()
 
-
     requestUrl =
         requestUrl +
         "&y=" +
         py.ToStr()
-
 
     downloadImage(
         requestUrl
@@ -313,10 +190,6 @@ sub clickPage()
 
 end sub
 
-
-' =========================================================
-' VOLTAR
-' =========================================================
 
 sub goBack()
 
@@ -324,12 +197,10 @@ sub goBack()
         "Voltando..."
     )
 
-
     requestUrl =
         m.serverBase +
         "/v5/back?session=" +
         m.session
-
 
     downloadImage(
         requestUrl
@@ -337,10 +208,6 @@ sub goBack()
 
 end sub
 
-
-' =========================================================
-' AVANCAR
-' =========================================================
 
 sub goForward()
 
@@ -348,12 +215,10 @@ sub goForward()
         "Avancando..."
     )
 
-
     requestUrl =
         m.serverBase +
         "/v5/forward?session=" +
         m.session
-
 
     downloadImage(
         requestUrl
@@ -362,13 +227,7 @@ sub goForward()
 end sub
 
 
-' =========================================================
-' ROLAGEM
-' =========================================================
-
-sub scrollPage(
-    amount as Integer
-)
+sub scrollPage(amount as Integer)
 
     if amount > 0
 
@@ -384,19 +243,16 @@ sub scrollPage(
 
     end if
 
-
     requestUrl =
         m.serverBase +
         "/v5/scroll?session=" +
         m.session
-
 
     requestUrl =
         requestUrl +
         "&dy=" +
         amount.ToStr()
 
-
     downloadImage(
         requestUrl
     )
@@ -404,71 +260,18 @@ sub scrollPage(
 end sub
 
 
-' =========================================================
-' IR AO TOPO
-' =========================================================
-
-sub goTop()
-
-    setStatus(
-        "Indo para o topo..."
-    )
-
-
-    requestUrl =
-        m.serverBase +
-        "/v5/top?session=" +
-        m.session
-
-
-    downloadImage(
-        requestUrl
-    )
-
-end sub
-
-
-' =========================================================
-' IR AO FINAL
-' =========================================================
-
-sub goBottom()
-
-    setStatus(
-        "Indo para o final..."
-    )
-
-
-    requestUrl =
-        m.serverBase +
-        "/v5/bottom?session=" +
-        m.session
-
-
-    downloadImage(
-        requestUrl
-    )
-
-end sub
-
-
-' =========================================================
-' DOWNLOAD
-' =========================================================
-
-sub downloadImage(
-    requestUrl as String
-)
+sub downloadImage(requestUrl as String)
 
     m.imageSerial =
         m.imageSerial + 1
-
 
     requestUrl =
         requestUrl +
         "&_roku=" +
         m.imageSerial.ToStr()
 
+    ' Limpa a imagem antiga antes do novo download
+    m.pagePoster.uri = ""
 
     task =
         CreateObject(
@@ -476,30 +279,24 @@ sub downloadImage(
             "ImageTask"
         )
 
-
     task.url =
         requestUrl
 
-
     task.fileId =
         m.imageSerial.ToStr()
-
 
     task.ObserveField(
         "localUri",
         "onImageReady"
     )
 
-
     task.ObserveField(
         "errorText",
         "onImageError"
     )
 
-
     m.imageTask =
         task
-
 
     task.control =
         "run"
@@ -507,26 +304,29 @@ sub downloadImage(
 end sub
 
 
-' =========================================================
-' IMAGEM PRONTA
-' =========================================================
-
-sub onImageReady(
-    e as Object
-)
+sub onImageReady(e as Object)
 
     uri =
         e.GetData()
 
-
     if uri <> invalid and uri <> ""
 
-        m.pagePoster.uri =
-            uri
+        ' Forca a Roku a trocar a imagem
+        m.pagePoster.visible = false
+        m.pagePoster.uri = ""
 
+        m.pagePoster.uri = uri
+
+        m.pagePoster.visible = true
 
         setStatus(
             "Pagina pronta"
+        )
+
+    else
+
+        setStatus(
+            "Imagem nao recebida"
         )
 
     end if
@@ -534,25 +334,22 @@ sub onImageReady(
 end sub
 
 
-' =========================================================
-' ERRO
-' =========================================================
-
-sub onImageError(
-    e as Object
-)
+sub onImageError(e as Object)
 
     errorMessage =
         e.GetData()
 
+    if errorMessage = invalid
 
-    if errorMessage = invalid or errorMessage = ""
+        errorMessage =
+            "Erro ao carregar pagina"
+
+    else if errorMessage = ""
 
         errorMessage =
             "Erro ao carregar pagina"
 
     end if
-
 
     setStatus(
         errorMessage
@@ -561,42 +358,29 @@ sub onImageError(
 end sub
 
 
-' =========================================================
-' CURSOR
-' =========================================================
-
-sub moveCursor(
-    dx as Integer,
-    dy as Integer
-)
+sub moveCursor(dx as Integer, dy as Integer)
 
     m.cx =
         m.cx + dx
 
-
     m.cy =
         m.cy + dy
-
 
     if m.cx < 35 then
         m.cx = 35
     end if
 
-
     if m.cx > 1225 then
         m.cx = 1225
     end if
-
 
     if m.cy < 120 then
         m.cy = 120
     end if
 
-
     if m.cy > 590 then
         m.cy = 590
     end if
-
 
     m.cursor.translation =
         [
@@ -604,13 +388,11 @@ sub moveCursor(
             m.cy
         ]
 
-
     m.cursorShadow.translation =
         [
             m.cx - 3,
             m.cy + 3
         ]
-
 
     m.cursorCenter.translation =
         [
@@ -620,10 +402,6 @@ sub moveCursor(
 
 end sub
 
-
-' =========================================================
-' CONTROLE
-' =========================================================
 
 function onKeyEvent(
     key as String,
@@ -730,7 +508,6 @@ function onKeyEvent(
         return true
 
     end if
-
 
     return false
 
