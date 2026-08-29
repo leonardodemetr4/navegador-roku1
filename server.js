@@ -43,6 +43,15 @@ function validUrl(text) {
   }
 }
 
+function escapeHtml(text) {
+  return String(text || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 async function newSession(id) {
   const old = sessions.get(id);
 
@@ -59,11 +68,8 @@ async function newSession(id) {
       width: 1280,
       height: 720
     },
-
     locale: "pt-BR",
-
     ignoreHTTPSErrors: true,
-
     userAgent:
       "Mozilla/5.0 (X11; Linux x86_64) " +
       "AppleWebKit/537.36 " +
@@ -74,12 +80,11 @@ async function newSession(id) {
   const page = await context.newPage();
 
   page.setDefaultTimeout(15000);
-
   page.setDefaultNavigationTimeout(30000);
 
   const session = {
-    context: context,
-    page: page,
+    context,
+    page,
     last: Date.now()
   };
 
@@ -106,58 +111,44 @@ function sendImage(res, image) {
     "no-store, no-cache, must-revalidate"
   );
 
-  res.set(
-    "Pragma",
-    "no-cache"
-  );
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
 
-  res.set(
-    "Expires",
-    "0"
-  );
-
-  res
+  return res
     .status(200)
     .type("png")
     .send(image);
 }
 
-async function screenshot(page, res) {
-  await page.waitForTimeout(300);
+async function screenshot(page, res, delay = 250) {
+  if (delay > 0) {
+    await page.waitForTimeout(delay);
+  }
 
   const image = await page.screenshot({
     type: "png",
     fullPage: false
   });
 
-  sendImage(res, image);
+  return sendImage(res, image);
 }
 
-function escapeHtml(text) {
-  return String(text || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
+async function openPage(page, rawUrl) {
+  const url = validUrl(rawUrl);
 
-async function openUrl(page, url) {
-  const safe = validUrl(url);
-
-  if (!safe) {
+  if (!url) {
     return false;
   }
 
   try {
-    console.log("Abrindo:", safe);
+    console.log("Abrindo:", url);
 
-    await page.goto(safe, {
+    await page.goto(url, {
       waitUntil: "domcontentloaded",
       timeout: 30000
     });
 
-    await page.waitForTimeout(700);
+    await page.waitForTimeout(600);
 
     return true;
   } catch (error) {
@@ -167,7 +158,7 @@ async function openUrl(page, url) {
     );
 
     try {
-      const content = await page.evaluate(() => {
+      return await page.evaluate(() => {
         if (!document.body) {
           return false;
         }
@@ -177,15 +168,13 @@ async function openUrl(page, url) {
           document.images.length > 0
         );
       });
-
-      return content;
     } catch {
       return false;
     }
   }
 }
 
-async function messagePage(
+async function showMessage(
   page,
   res,
   title,
@@ -193,14 +182,11 @@ async function messagePage(
 ) {
   const html = `
 <!doctype html>
-
 <html>
-
 <head>
 <meta charset="utf-8">
 
 <style>
-
 body {
   margin: 0;
   background: #071b2a;
@@ -224,9 +210,7 @@ h1 {
 
 p {
   font-size: 25px;
-  line-height: 1.5;
 }
-
 </style>
 
 </head>
@@ -246,7 +230,6 @@ ${escapeHtml(message)}
 </div>
 
 </body>
-
 </html>
 `;
 
@@ -254,14 +237,31 @@ ${escapeHtml(message)}
 
   return screenshot(
     page,
-    res
+    res,
+    100
   );
 }
 
-
-/* =========================
-   PESQUISA
-========================= */
+function cleanXml(text) {
+  return String(text || "")
+    .replace(
+      /<!\[CDATA\[|\]\]>/g,
+      ""
+    )
+    .replace(
+      /<[^>]+>/g,
+      " "
+    )
+    .replace(
+      /&amp;/g,
+      "&"
+    )
+    .replace(
+      /\s+/g,
+      " "
+    )
+    .trim();
+}
 
 async function searchWeb(query) {
   const url =
@@ -292,14 +292,14 @@ async function searchWeb(query) {
   const xml =
     await response.text();
 
-  const items =
+  const blocks =
     xml.match(
       /<item[\s\S]*?<\/item>/gi
     ) || [];
 
   const results = [];
 
-  for (const item of items.slice(0, 10)) {
+  for (const item of blocks.slice(0, 10)) {
     const titleMatch =
       item.match(
         /<title>([\s\S]*?)<\/title>/i
@@ -315,92 +315,62 @@ async function searchWeb(query) {
         /<description>([\s\S]*?)<\/description>/i
       );
 
-    if (
-      !titleMatch ||
-      !linkMatch
-    ) {
+    if (!titleMatch || !linkMatch) {
       continue;
     }
 
-    let title =
-      titleMatch[1];
+    const title =
+      cleanXml(
+        titleMatch[1]
+      );
 
-    let link =
-      linkMatch[1];
+    const link =
+      cleanXml(
+        linkMatch[1]
+      );
 
-    let description =
+    const description =
       descMatch
-        ? descMatch[1]
+        ? cleanXml(descMatch[1])
         : "";
-
-    title = title
-      .replace(/<!CDATA\[|\]>/g, "")
-      .replace(/<[^>]+>/g, "")
-      .replace(/&amp;/g, "&");
-
-    link = link
-      .replace(/<!CDATA\[|\]>/g, "")
-      .replace(/&amp;/g, "&")
-      .trim();
-
-    description = description
-      .replace(/<!CDATA\[|\]>/g, "")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/&amp;/g, "&")
-      .replace(/\s+/g, " ")
-      .trim();
 
     if (!validUrl(link)) {
       continue;
     }
 
     results.push({
-      title: title,
-      link: link,
-      description: description
+      title,
+      link,
+      description
     });
   }
 
   return results;
 }
 
-function resultsPage(
+function searchPage(
   query,
   results
 ) {
-  let content = "";
+  let cards = "";
 
   if (results.length === 0) {
-    content = `
+    cards = `
 <div class="empty">
-
-<h2>
-Nenhum resultado encontrado
-</h2>
-
-<p>
-Tente pesquisar outras palavras.
-</p>
-
+Nenhum resultado encontrado.
 </div>
 `;
   } else {
     results.forEach(
       (item, index) => {
-        content += `
+        cards += `
 <a
   class="result"
   href="${escapeHtml(item.link)}"
 >
 
-<div class="number">
-${index + 1}
-</div>
-
-<div>
-
 <div class="title">
-${escapeHtml(item.title)}
+${index + 1}. ${escapeHtml(item.title)}
 </div>
 
 <div class="url">
@@ -409,8 +379,6 @@ ${escapeHtml(item.link)}
 
 <div class="description">
 ${escapeHtml(item.description)}
-</div>
-
 </div>
 
 </a>
@@ -430,87 +398,67 @@ ${escapeHtml(item.description)}
 
 <style>
 
-* {
-  box-sizing: border-box;
-}
-
 body {
   margin: 0;
   padding: 25px 35px 60px;
-  background: #f3f8fa;
-  font-family: Arial, sans-serif;
+  background: #f4f8fa;
   color: #17394a;
+  font-family: Arial, sans-serif;
 }
 
 .header {
   background: #082a42;
-  border-bottom: 5px solid #18c7d9;
   color: white;
   padding: 22px 28px;
   margin-bottom: 20px;
+  border-bottom: 5px solid #18c7d9;
   border-radius: 12px;
 }
 
 .header h1 {
   margin: 0 0 8px;
-  font-size: 32px;
+  font-size: 31px;
 }
 
 .header p {
   margin: 0;
-  font-size: 21px;
+  font-size: 20px;
   color: #b9e9ee;
 }
 
 .result {
-  display: flex;
-  background: white;
-  color: #17394a;
-  text-decoration: none;
-  padding: 18px;
+  display: block;
+  padding: 18px 20px;
   margin-bottom: 15px;
+  background: white;
   border: 2px solid #d6e6eb;
   border-radius: 10px;
-}
-
-.number {
-  width: 48px;
-  height: 48px;
-  min-width: 48px;
-  line-height: 48px;
-  text-align: center;
-  background: #0e6e91;
-  color: white;
-  font-size: 22px;
-  font-weight: bold;
-  border-radius: 8px;
-  margin-right: 18px;
+  color: #17394a;
+  text-decoration: none;
 }
 
 .title {
-  font-size: 25px;
+  font-size: 24px;
   font-weight: bold;
   color: #075d79;
-  margin-bottom: 6px;
 }
 
 .url {
-  font-size: 16px;
+  margin: 6px 0;
+  font-size: 15px;
   color: #23808f;
-  margin-bottom: 7px;
 }
 
 .description {
-  font-size: 19px;
+  font-size: 18px;
   line-height: 1.3;
-  color: #435f69;
 }
 
 .empty {
+  padding: 30px;
   background: white;
-  padding: 35px;
-  border-radius: 12px;
-  font-size: 22px;
+  border-radius: 10px;
+  font-size: 24px;
 }
 
 </style>
@@ -531,18 +479,13 @@ ${escapeHtml(query)}
 
 </div>
 
-${content}
+${cards}
 
 </body>
 
 </html>
 `;
 }
-
-
-/* =========================
-   SERVIDOR ONLINE
-========================= */
 
 app.get(
   "/",
@@ -554,11 +497,6 @@ app.get(
   }
 );
 
-
-/* =========================
-   HEALTH CHECK
-========================= */
-
 app.get(
   "/health",
   (req, res) => {
@@ -568,11 +506,6 @@ app.get(
     });
   }
 );
-
-
-/* =========================
-   ABRIR SITE
-========================= */
 
 app.get(
   "/v5/open",
@@ -608,13 +541,13 @@ app.get(
         await newSession(id);
 
       const ok =
-        await openUrl(
+        await openPage(
           session.page,
           url
         );
 
       if (!ok) {
-        return messagePage(
+        return showMessage(
           session.page,
           res,
           "Pagina indisponivel",
@@ -626,11 +559,10 @@ app.get(
         session.page,
         res
       );
-
     } catch (error) {
       console.error(
         "OPEN:",
-        error
+        error.message
       );
 
       return res
@@ -641,11 +573,6 @@ app.get(
     }
   }
 );
-
-
-/* =========================
-   PESQUISAR
-========================= */
 
 app.get(
   "/v5/search",
@@ -677,11 +604,6 @@ app.get(
     }
 
     try {
-      console.log(
-        "Pesquisando:",
-        query
-      );
-
       const session =
         await newSession(id);
 
@@ -704,14 +626,11 @@ app.get(
         results.length
       );
 
-      const html =
-        resultsPage(
+      await session.page.setContent(
+        searchPage(
           query,
           results
-        );
-
-      await session.page.setContent(
-        html,
+        ),
         {
           waitUntil:
             "domcontentloaded"
@@ -720,13 +639,13 @@ app.get(
 
       return screenshot(
         session.page,
-        res
+        res,
+        100
       );
-
     } catch (error) {
       console.error(
         "SEARCH:",
-        error
+        error.message
       );
 
       return res
@@ -737,11 +656,6 @@ app.get(
     }
   }
 );
-
-
-/* =========================
-   CLIQUE
-========================= */
 
 app.get(
   "/v5/click",
@@ -802,7 +716,7 @@ app.get(
       );
 
     try {
-      const target =
+      const link =
         await session.page.evaluate(
           ({ x, y }) => {
             const elements =
@@ -815,10 +729,7 @@ app.get(
             let best = null;
             let distance = Infinity;
 
-            for (
-              const element
-              of elements
-            ) {
+            for (const element of elements) {
               const rect =
                 element.getBoundingClientRect();
 
@@ -847,16 +758,10 @@ app.get(
                   )
                 );
 
-              const dx =
-                nx - x;
-
-              const dy =
-                ny - y;
-
               const d =
-                Math.sqrt(
-                  dx * dx +
-                  dy * dy
+                Math.hypot(
+                  nx - x,
+                  ny - y
                 );
 
               if (d < distance) {
@@ -869,9 +774,7 @@ app.get(
               !best ||
               distance > 170
             ) {
-              return {
-                found: false
-              };
+              return "";
             }
 
             const anchor =
@@ -883,16 +786,10 @@ app.get(
               anchor &&
               anchor.href
             ) {
-              return {
-                found: true,
-                href: anchor.href
-              };
+              return anchor.href;
             }
 
-            return {
-              found: true,
-              href: ""
-            };
+            return "";
           },
           {
             x: px,
@@ -900,18 +797,10 @@ app.get(
           }
         );
 
-      if (
-        target.found &&
-        target.href
-      ) {
-        console.log(
-          "Abrindo link:",
-          target.href
-        );
-
-        await openUrl(
+      if (link) {
+        await openPage(
           session.page,
-          target.href
+          link
         );
       } else {
         try {
@@ -924,7 +813,7 @@ app.get(
 
           await session.page
             .waitForTimeout(
-              500
+              400
             );
         } catch {}
       }
@@ -933,14 +822,13 @@ app.get(
         session.page,
         res
       );
-
     } catch (error) {
       console.error(
         "CLICK:",
-        error
+        error.message
       );
 
-      return messagePage(
+      return showMessage(
         session.page,
         res,
         "Erro no clique",
@@ -950,11 +838,6 @@ app.get(
   }
 );
 
-
-/* =========================
-   VOLTAR
-========================= */
-
 app.get(
   "/v5/back",
   async (req, res) => {
@@ -962,7 +845,7 @@ app.get(
       getSession(
         String(
           req.query.session || ""
-        )
+        ).trim()
       );
 
     if (!session) {
@@ -977,7 +860,6 @@ app.get(
       await session.page.goBack({
         waitUntil:
           "domcontentloaded",
-
         timeout:
           15000
       });
@@ -990,11 +872,6 @@ app.get(
   }
 );
 
-
-/* =========================
-   AVANCAR
-========================= */
-
 app.get(
   "/v5/forward",
   async (req, res) => {
@@ -1002,7 +879,7 @@ app.get(
       getSession(
         String(
           req.query.session || ""
-        )
+        ).trim()
       );
 
     if (!session) {
@@ -1017,7 +894,6 @@ app.get(
       await session.page.goForward({
         waitUntil:
           "domcontentloaded",
-
         timeout:
           15000
       });
@@ -1030,11 +906,6 @@ app.get(
   }
 );
 
-
-/* =========================
-   ROLAGEM
-========================= */
-
 app.get(
   "/v5/scroll",
   async (req, res) => {
@@ -1042,7 +913,7 @@ app.get(
       getSession(
         String(
           req.query.session || ""
-        )
+        ).trim()
       );
 
     if (!session) {
@@ -1081,25 +952,15 @@ app.get(
         },
         dy
       );
-
-      await session.page
-        .waitForTimeout(
-          200
-        );
-
     } catch {}
 
     return screenshot(
       session.page,
-      res
+      res,
+      150
     );
   }
 );
-
-
-/* =========================
-   LIMPAR SESSOES ANTIGAS
-========================= */
 
 setInterval(
   async () => {
@@ -1107,15 +968,12 @@ setInterval(
       Date.now();
 
     for (
-      const [
-        id,
-        session
-      ]
+      const [id, session]
       of sessions
     ) {
       if (
         now - session.last >
-        30 * 60 * 1000
+        1800000
       ) {
         try {
           await session
@@ -1130,12 +988,13 @@ setInterval(
   60000
 );
 
-
-/* =========================
-   INICIAR
-========================= */
-
 app.listen(
   PORT,
   "0.0.0.0",
-  () =>
+  () => {
+    console.log(
+      "Navegador Roku V5.2 iniciado na porta " +
+      PORT
+    );
+  }
+);
