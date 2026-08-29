@@ -1,318 +1,180 @@
-const express = require("express");
-const { chromium } = require("playwright");
+const express = require('express');
+const { chromium } = require('playwright');
 
 const app = express();
-
-const PORT =
-  process.env.PORT || 10000;
+const PORT = process.env.PORT || 10000;
 
 let browserPromise = null;
-
-const sessions =
-  new Map();
-
-
-/* =========================================================
-   CONFIGURACAO DO CHROMIUM
-========================================================= */
+const sessions = new Map();
 
 async function getBrowser() {
-
   if (!browserPromise) {
-
-    browserPromise =
-      chromium.launch({
-        headless: true,
-
-        args: [
-          "--no-sandbox",
-          "--disable-dev-shm-usage",
-          "--disable-gpu",
-          "--disable-background-networking",
-          "--disable-default-apps",
-          "--disable-extensions"
-        ]
-      });
-
+    browserPromise = chromium.launch({
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu'
+      ]
+    });
   }
-
   return browserPromise;
 }
 
+async function createSession() {
+  const browser = await getBrowser();
 
-/* =========================================================
-   CRIAR PAGINA
-========================================================= */
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 720 },
+    locale: 'pt-BR',
+    ignoreHTTPSErrors: true,
 
-async function createPage() {
+    userAgent:
+      'Mozilla/5.0 (X11; Linux x86_64) ' +
+      'AppleWebKit/537.36 (KHTML, like Gecko) ' +
+      'Chrome/131.0.0.0 Safari/537.36',
 
-  const browser =
-    await getBrowser();
+    extraHTTPHeaders: {
+      'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8'
+    }
+  });
 
-  const context =
-    await browser.newContext({
+  const page = await context.newPage();
 
-      viewport: {
-        width: 1280,
-        height: 720
-      },
-
-      screen: {
-        width: 1280,
-        height: 720
-      },
-
-      locale:
-        "pt-BR",
-
-      timezoneId:
-        "America/Sao_Paulo",
-
-      userAgent:
-        "Mozilla/5.0 (X11; Linux x86_64) " +
-        "AppleWebKit/537.36 " +
-        "(KHTML, like Gecko) " +
-        "Chrome/131.0.0.0 Safari/537.36",
-
-      ignoreHTTPSErrors:
-        true,
-
-      extraHTTPHeaders: {
-        "Accept-Language":
-          "pt-BR,pt;q=0.9,en;q=0.8"
-      }
-
-    });
-
-
-  const page =
-    await context.newPage();
-
-
-  page.setDefaultTimeout(
-    20000
-  );
-
-
-  page.setDefaultNavigationTimeout(
-    30000
-  );
-
+  page.setDefaultTimeout(15000);
+  page.setDefaultNavigationTimeout(30000);
 
   return {
     context,
-    page
+    page,
+    last: Date.now()
   };
 }
 
-
-/* =========================================================
-   VALIDAR URL
-========================================================= */
+function validSession(id) {
+  return /^[A-Za-z0-9_-]{1,50}$/.test(id || '');
+}
 
 function validUrl(raw) {
-
   try {
-
-    const url =
-      new URL(raw);
-
+    const url = new URL(raw);
 
     if (
-      url.protocol !== "http:" &&
-      url.protocol !== "https:"
+      url.protocol !== 'http:' &&
+      url.protocol !== 'https:'
     ) {
-
       return null;
     }
 
-
     return url;
-
   } catch {
-
     return null;
   }
 }
 
-
-/* =========================================================
-   VALIDAR SESSAO
-========================================================= */
-
-function validSession(id) {
-
-  return /^[A-Za-z0-9_-]{1,50}$/.test(
-    id || ""
-  );
-}
-
-
-/* =========================================================
-   CABECALHOS DA IMAGEM
-========================================================= */
-
-function sendImage(
-  res,
-  image
-) {
-
-  res.set(
-    "Cache-Control",
-    "no-store, no-cache, must-revalidate, proxy-revalidate"
-  );
-
-  res.set(
-    "Pragma",
-    "no-cache"
-  );
-
-  res.set(
-    "Expires",
-    "0"
-  );
-
-  res.set(
-    "Surrogate-Control",
-    "no-store"
-  );
-
-  res.type(
-    "png"
-  );
-
-  res.status(200);
-
-  res.send(
-    image
-  );
-}
-
-
-/* =========================================================
-   ESPERAR PAGINA
-========================================================= */
-
-async function waitPageReady(
-  page,
-  extraDelay = 700
-) {
-
-  try {
-
-    await page.waitForLoadState(
-      "domcontentloaded",
-      {
-        timeout: 10000
-      }
-    );
-
-  } catch {}
-
-
-  try {
-
-    await page.waitForLoadState(
-      "networkidle",
-      {
-        timeout: 4500
-      }
-    );
-
-  } catch {}
-
-
-  try {
-
-    await page.waitForFunction(
-      () => {
-
-        return (
-          document.body &&
-          document.body.innerText &&
-          document.body.innerText.trim().length > 10
-        );
-
-      },
-      {
-        timeout: 4000
-      }
-    );
-
-  } catch {}
-
-
-  try {
-
-    await page.evaluate(
-      async () => {
-
-        if (
-          document.fonts &&
-          document.fonts.ready
-        ) {
-
-          await document.fonts.ready;
-
-        }
-
-      }
-    );
-
-  } catch {}
-
-
-  if (
-    extraDelay > 0
-  ) {
-
-    await page.waitForTimeout(
-      extraDelay
-    );
-
+function getSession(id) {
+  if (!validSession(id)) {
+    return null;
   }
 
+  const session = sessions.get(id);
+
+  if (!session) {
+    return null;
+  }
+
+  session.last = Date.now();
+
+  return session;
 }
 
+function sendPng(res, image) {
+  res.set(
+    'Cache-Control',
+    'no-store, no-cache, must-revalidate, proxy-revalidate'
+  );
 
-/* =========================================================
-   TIRAR SCREENSHOT
-========================================================= */
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  res.set('Surrogate-Control', 'no-store');
 
-async function screenshot(
+  res
+    .status(200)
+    .type('png')
+    .send(image);
+}
+
+async function waitReady(page, delay = 500) {
+  try {
+    await page.waitForLoadState(
+      'domcontentloaded',
+      {
+        timeout: 8000
+      }
+    );
+  } catch {}
+
+  try {
+    await page.waitForLoadState(
+      'networkidle',
+      {
+        timeout: 3500
+      }
+    );
+  } catch {}
+
+  if (delay > 0) {
+    await page.waitForTimeout(delay);
+  }
+}
+
+async function capture(
   page,
   res,
-  delay = 700
+  delay = 500
 ) {
-
-  await waitPageReady(
+  await waitReady(
     page,
     delay
   );
 
-
   const image =
     await page.screenshot({
-
-      type:
-        "png",
-
-      fullPage:
-        false
-
+      type: 'png',
+      fullPage: false
     });
 
-
-  sendImage(
+  sendPng(
     res,
     image
   );
 }
 
-
-/* =========================================================
-   MOSTRAR PAGINA DE ERRO
-========================================================= */
+function escapeHtml(text) {
+  return String(
+    text || ''
+  )
+    .replace(
+      /&/g,
+      '&amp;'
+    )
+    .replace(
+      /</g,
+      '&lt;'
+    )
+    .replace(
+      />/g,
+      '&gt;'
+    )
+    .replace(
+      /"/g,
+      '&quot;'
+    )
+    .replace(
+      /'/g,
+      '&#039;'
+    );
+}
 
 async function showMessage(
   page,
@@ -320,783 +182,481 @@ async function showMessage(
   title,
   message
 ) {
+  const html = `
+<!doctype html>
+
+<html>
+
+<head>
+
+<meta charset="utf-8">
+
+<meta
+  name="viewport"
+  content="width=device-width,initial-scale=1"
+>
+
+<style>
+
+body {
+  margin: 0;
+  background: #071b2a;
+  color: white;
+  font-family: Arial, sans-serif;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+}
+
+.box {
+  width: 80%;
+  padding: 40px;
+  background: #0b2c40;
+  border: 2px solid #20d9e8;
+  border-radius: 12px;
+}
+
+h1 {
+  color: #5eeaf2;
+  font-size: 40px;
+  margin: 0 0 20px;
+}
+
+p {
+  font-size: 25px;
+  line-height: 1.45;
+  margin: 0 0 20px;
+}
+
+small {
+  font-size: 19px;
+  color: #a9dce5;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="box">
+
+<h1>
+${escapeHtml(title)}
+</h1>
+
+<p>
+${escapeHtml(message)}
+</p>
+
+<small>
+Use * para pesquisar ou digitar outro endereco.
+</small>
+
+</div>
+
+</body>
+
+</html>
+`;
 
   try {
-
     await page.setContent(
-      `
-      <!DOCTYPE html>
-
-      <html>
-
-      <head>
-
-      <meta charset="UTF-8">
-
-      <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1"
-      >
-
-      <style>
-
-      * {
-        box-sizing: border-box;
-      }
-
-      body {
-        margin: 0;
-        width: 100vw;
-        height: 100vh;
-        background:
-          linear-gradient(
-            135deg,
-            #071b2a,
-            #0b3952
-          );
-        font-family:
-          Arial,
-          Helvetica,
-          sans-serif;
-        color: white;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      }
-
-      .box {
-        width: 80%;
-        max-width: 900px;
-        padding: 45px;
-        background:
-          rgba(
-            5,
-            28,
-            44,
-            0.94
-          );
-        border:
-          2px solid #20d9e8;
-        border-radius:
-          12px;
-      }
-
-      h1 {
-        margin-top: 0;
-        color: #5eeaf2;
-        font-size: 40px;
-      }
-
-      p {
-        font-size: 25px;
-        line-height: 1.5;
-        color: #e8f7fa;
-      }
-
-      small {
-        font-size: 19px;
-        color: #9bcbd6;
-      }
-
-      </style>
-
-      </head>
-
-      <body>
-
-      <div class="box">
-
-      <h1>
-        ${escapeHtml(title)}
-      </h1>
-
-      <p>
-        ${escapeHtml(message)}
-      </p>
-
-      <small>
-        Use * para tentar outra pesquisa ou endereco.
-      </small>
-
-      </div>
-
-      </body>
-
-      </html>
-      `,
+      html,
       {
         waitUntil:
-          "domcontentloaded"
+          'domcontentloaded'
       }
     );
 
-
     await page.waitForTimeout(
-      200
+      150
     );
-
 
     const image =
       await page.screenshot({
-        type:
-          "png",
-
-        fullPage:
-          false
+        type: 'png',
+        fullPage: false
       });
 
-
-    sendImage(
+    sendPng(
       res,
       image
     );
 
-  } catch (error) {
-
+  } catch (err) {
     console.error(
-      "Erro ao montar mensagem:",
-      error
+      'showMessage:',
+      err.message
     );
 
+    if (!res.headersSent) {
+      res
+        .status(200)
+        .type('text/plain')
+        .send(
+          'Pagina indisponivel'
+        );
+    }
+  }
+}
+
+function duckQueryFromUrl(raw) {
+  try {
+    const url =
+      new URL(raw);
 
     if (
-      !res.headersSent
+      !url.hostname
+        .toLowerCase()
+        .includes(
+          'duckduckgo.com'
+        )
     ) {
-
-      res.status(200)
-        .type("text/plain")
-        .send(
-          "Pagina indisponivel"
-        );
-
+      return null;
     }
 
-  }
-
-}
-
-
-/* =========================================================
-   ESCAPAR HTML
-========================================================= */
-
-function escapeHtml(value) {
-
-  return String(
-    value || ""
-  )
-    .replace(
-      /&/g,
-      "&amp;"
-    )
-    .replace(
-      /</g,
-      "&lt;"
-    )
-    .replace(
-      />/g,
-      "&gt;"
-    )
-    .replace(
-      /"/g,
-      "&quot;"
-    )
-    .replace(
-      /'/g,
-      "&#039;"
-    );
-}
-
-
-/* =========================================================
-   EXTRAIR PESQUISA DUCKDUCKGO
-========================================================= */
-
-function getDuckQuery(
-  rawUrl
-) {
-
-  try {
-
-    const url =
-      new URL(
-        rawUrl
+    const q =
+      url.searchParams.get(
+        'q'
       );
 
+    return q && q.trim()
+      ? q.trim()
+      : null;
 
-    const host =
-      url.hostname
-        .toLowerCase();
-
-
-    if (
-      host.includes(
-        "duckduckgo.com"
-      )
-    ) {
-
-      const q =
-        url.searchParams.get(
-          "q"
-        );
-
-
-      if (
-        q &&
-        q.trim() !== ""
-      ) {
-
-        return q.trim();
-      }
-
-    }
-
-  } catch {}
-
-
-  return null;
+  } catch {
+    return null;
+  }
 }
-
-
-/* =========================================================
-   ABRIR URL COM FALLBACK
-========================================================= */
 
 async function navigateSafe(
   page,
   rawUrl
 ) {
-
   const url =
     validUrl(
       rawUrl
     );
 
-
   if (!url) {
-
     return {
       ok: false,
       reason:
-        "Endereco invalido"
+        'Endereco invalido.'
     };
-
   }
 
-
-  const duckQuery =
-    getDuckQuery(
-      url.toString()
-    );
-
-
   try {
-
     console.log(
-      "Abrindo:",
+      'Abrindo:',
       url.toString()
     );
-
 
     await page.goto(
       url.toString(),
       {
         waitUntil:
-          "domcontentloaded",
+          'domcontentloaded',
 
         timeout:
           30000
       }
     );
 
-
-    await waitPageReady(
+    await waitReady(
       page,
-      duckQuery
-        ? 900
-        : 600
+      600
     );
-
 
     return {
-      ok: true,
-      url:
-        page.url()
+      ok: true
     };
 
-  } catch (error) {
-
+  } catch (err) {
     console.log(
-      "Primeira tentativa falhou:",
-      error.message
+      'Falha na primeira tentativa:',
+      err.message
     );
-
   }
 
+  const query =
+    duckQueryFromUrl(
+      url.toString()
+    );
 
-  /*
-     Se DuckDuckGo HTML falhar,
-     tenta a versao Lite.
-  */
-
-  if (duckQuery) {
-
+  if (query) {
     try {
-
       const fallback =
-        "https://lite.duckduckgo.com/lite/?q=" +
+        'https://lite.duckduckgo.com/lite/?q=' +
         encodeURIComponent(
-          duckQuery
+          query
         );
 
-
       console.log(
-        "Tentando busca alternativa:",
+        'Tentando DuckDuckGo Lite:',
         fallback
       );
-
 
       await page.goto(
         fallback,
         {
           waitUntil:
-            "domcontentloaded",
+            'domcontentloaded',
 
           timeout:
             25000
         }
       );
 
-
-      await waitPageReady(
+      await waitReady(
         page,
-        900
+        700
       );
-
 
       return {
-        ok: true,
-        url:
-          page.url(),
-        fallback:
-          true
+        ok: true
       };
 
-    } catch (error) {
-
+    } catch (err) {
       console.log(
-        "DuckDuckGo Lite falhou:",
-        error.message
+        'Fallback falhou:',
+        err.message
       );
-
     }
-
   }
 
-
-  /*
-     Algumas paginas geram timeout,
-     mas mesmo assim carregam conteúdo.
-     Se o body tiver texto, usamos a pagina.
-  */
-
   try {
-
-    const contentExists =
+    const hasContent =
       await page.evaluate(
         () => {
+          const text =
+            document.body
+              ? document.body.innerText.trim()
+              : '';
 
-          return Boolean(
-            document.body &&
-            (
-              document.body.innerText.trim().length > 15 ||
-              document.images.length > 0
-            )
+          const images =
+            document.images
+              ? document.images.length
+              : 0;
+
+          return (
+            text.length > 15 ||
+            images > 0
           );
-
         }
       );
 
-
-    if (contentExists) {
-
+    if (hasContent) {
       return {
-        ok: true,
-        partial:
-          true,
-        url:
-          page.url()
+        ok: true
       };
-
     }
 
   } catch {}
 
-
   return {
     ok: false,
+
     reason:
-      "Nao foi possivel abrir esta pagina."
+      'O site demorou demais ou recusou a conexao.'
   };
 }
 
-
-/* =========================================================
-   PEGAR SESSAO
-========================================================= */
-
-function getSession(
-  id
-) {
-
-  if (
-    !validSession(id)
-  ) {
-
-    return null;
-  }
-
-
-  if (
-    !sessions.has(id)
-  ) {
-
-    return null;
-  }
-
-
-  const session =
-    sessions.get(id);
-
-
-  session.last =
-    Date.now();
-
-
-  return session;
-}
-
-
-/* =========================================================
-   PAGINA INICIAL DO SERVIDOR
-========================================================= */
-
 app.get(
-  "/",
+  '/',
   (_req, res) => {
-
     res.send(
-      `
-      <h1>
-        Navegador Roku V5.1
-      </h1>
-
-      <p>
-        Servidor online.
-      </p>
-      `
+      '<h1>Navegador Roku V5.1</h1>' +
+      '<p>Servidor online.</p>'
     );
-
   }
 );
 
-
-/* =========================================================
-   HEALTH
-========================================================= */
-
 app.get(
-  "/health",
+  '/health',
   (_req, res) => {
-
     res.json({
-      ok:
-        true,
+      ok: true,
 
       service:
-        "navegador-roku-v5.1",
+        'navegador-roku-v5.1',
 
       sessions:
         sessions.size
-
     });
-
   }
 );
 
-
-/* =========================================================
-   V5 INFO
-========================================================= */
-
 app.get(
-  "/v5/info",
+  '/v5/info',
   (req, res) => {
-
     const id =
       String(
-        req.query.session || ""
+        req.query.session || ''
       ).trim();
-
 
     const session =
-      getSession(
-        id
-      );
-
+      getSession(id);
 
     if (!session) {
-
       return res.json({
-        ok:
-          false
+        ok: false
       });
-
     }
 
-
     res.json({
-
-      ok:
-        true,
-
+      ok: true,
       url:
         session.page.url()
-
     });
-
   }
 );
 
-
-/* =========================================================
-   V5 OPEN
-========================================================= */
-
 app.get(
-  "/v5/open",
+  '/v5/open',
   async (req, res) => {
-
     const id =
       String(
-        req.query.session || ""
+        req.query.session || ''
       ).trim();
-
 
     const rawUrl =
       String(
-        req.query.url || ""
+        req.query.url || ''
       ).trim();
 
-
-    if (
-      !validSession(id)
-    ) {
-
-      return res.status(400)
+    if (!validSession(id)) {
+      return res
+        .status(400)
         .send(
-          "Sessao invalida"
+          'Sessao invalida'
         );
-
     }
 
-
-    const url =
-      validUrl(
-        rawUrl
-      );
-
-
-    if (!url) {
-
-      return res.status(400)
+    if (!validUrl(rawUrl)) {
+      return res
+        .status(400)
         .send(
-          "URL invalida"
+          'URL invalida'
         );
-
     }
 
-
-    let context = null;
-    let page = null;
-
+    let session;
 
     try {
-
-      if (
-        sessions.has(id)
-      ) {
-
+      if (sessions.has(id)) {
         try {
-
           await sessions
             .get(id)
             .context
             .close();
-
         } catch {}
 
-
-        sessions.delete(
-          id
-        );
-
+        sessions.delete(id);
       }
 
-
-      const created =
-        await createPage();
-
-
-      context =
-        created.context;
-
-
-      page =
-        created.page;
-
+      session =
+        await createSession();
 
       sessions.set(
         id,
-        {
-          context,
-          page,
-          last:
-            Date.now()
-        }
+        session
       );
-
 
       const result =
         await navigateSafe(
-          page,
-          url.toString()
+          session.page,
+          rawUrl
         );
-
 
       if (!result.ok) {
-
-        console.log(
-          "Falha ao abrir:",
-          url.toString()
-        );
-
-
-        return await showMessage(
-          page,
+        return showMessage(
+          session.page,
           res,
-          "Pagina indisponivel",
+          'Pagina indisponivel',
           result.reason
         );
-
       }
-
 
       console.log(
-        "Pagina atual:",
-        page.url()
+        'Pagina atual:',
+        session.page.url()
       );
 
-
-      return await screenshot(
-        page,
+      return capture(
+        session.page,
         res,
-        300
+        250
       );
 
-    } catch (error) {
-
+    } catch (err) {
       console.error(
-        "Erro /v5/open:",
-        error
+        '/v5/open:',
+        err.message
       );
 
-
-      if (page) {
-
-        return await showMessage(
-          page,
+      if (
+        session &&
+        session.page
+      ) {
+        return showMessage(
+          session.page,
           res,
-          "Erro ao abrir",
-          "O site demorou demais ou recusou a conexao. Tente novamente ou pesquise outro endereco."
+          'Erro ao abrir',
+          'Nao foi possivel carregar esta pagina agora.'
         );
-
       }
 
-
-      /*
-         Somente se nem o Chromium tiver conseguido iniciar.
-      */
-
-      return res.status(503)
+      return res
+        .status(503)
         .send(
-          "Servidor temporariamente indisponivel"
+          'Servidor temporariamente indisponivel'
         );
-
     }
-
   }
 );
 
-
-/* =========================================================
-   V5 CLICK
-========================================================= */
-
 app.get(
-  "/v5/click",
+  '/v5/click',
   async (req, res) => {
-
     const id =
       String(
-        req.query.session || ""
+        req.query.session || ''
       ).trim();
 
-
     const session =
-      getSession(
-        id
-      );
-
+      getSession(id);
 
     if (!session) {
-
-      return res.status(404)
+      return res
+        .status(404)
         .send(
-          "Sessao nao encontrada"
+          'Sessao nao encontrada'
         );
-
     }
-
 
     const x =
       Number(
         req.query.x
       );
 
-
     const y =
       Number(
         req.query.y
       );
 
-
     if (
       !Number.isFinite(x) ||
       !Number.isFinite(y)
     ) {
-
-      return res.status(400)
+      return res
+        .status(400)
         .send(
-          "Coordenadas invalidas"
+          'Coordenadas invalidas'
         );
-
     }
-
-
-    const page =
-      session.page;
-
 
     const px =
       Math.max(
@@ -1107,7 +667,6 @@ app.get(
         )
       );
 
-
     const py =
       Math.max(
         0,
@@ -1117,81 +676,69 @@ app.get(
         )
       );
 
+    const page =
+      session.page;
 
     try {
-
       console.log(
-        "Cursor recebido:",
+        'Cursor recebido:',
         px,
         py
       );
 
-
       const target =
         await page.evaluate(
           ({ x, y }) => {
-
-            const selectors =
+            const selector =
               [
-                "a",
-                "button",
-                "input",
-                "textarea",
-                "select",
+                'a',
+                'button',
+                'input',
+                'textarea',
+                'select',
                 "[role='button']",
                 "[role='link']",
-                "[onclick]"
-              ];
-
+                '[onclick]'
+              ].join(',');
 
             const elements =
               Array.from(
                 document.querySelectorAll(
-                  selectors.join(",")
+                  selector
                 )
               );
-
 
             let best =
               null;
 
-
             let bestDistance =
               Infinity;
-
 
             for (
               const el
               of elements
             ) {
-
               const rect =
                 el.getBoundingClientRect();
-
 
               if (
                 rect.width <= 1 ||
                 rect.height <= 1
               ) {
-
                 continue;
               }
-
 
               const style =
                 getComputedStyle(
                   el
                 );
 
-
               if (
-                style.display === "none" ||
-                style.visibility === "hidden"
+                style.display === 'none' ||
+                style.visibility === 'hidden'
               ) {
-
                 continue;
               }
-
 
               const nx =
                 Math.max(
@@ -1202,7 +749,6 @@ app.get(
                   )
                 );
 
-
               const ny =
                 Math.max(
                   rect.top,
@@ -1212,14 +758,11 @@ app.get(
                   )
                 );
 
-
               const dx =
                 nx - x;
 
-
               const dy =
                 ny - y;
-
 
               const distance =
                 Math.sqrt(
@@ -1227,498 +770,513 @@ app.get(
                   dy * dy
                 );
 
-
               if (
                 distance <
                 bestDistance
               ) {
-
                 bestDistance =
                   distance;
 
                 best =
                   el;
-
               }
-
             }
-
 
             if (
               !best ||
               bestDistance > 160
             ) {
-
               return {
-                found:
-                  false
+                found: false
               };
-
             }
-
 
             const anchor =
               best.tagName
-                .toLowerCase() === "a"
+                .toLowerCase() === 'a'
                 ? best
-                : best.closest("a");
-
+                : best.closest(
+                    'a'
+                  );
 
             if (
               anchor &&
               anchor.href
             ) {
-
               return {
-
-                found:
-                  true,
+                found: true,
 
                 type:
-                  "link",
+                  'link',
 
                 href:
                   anchor.href,
-
-                text:
-                  (
-                    anchor.innerText ||
-                    anchor.textContent ||
-                    ""
-                  )
-                    .trim()
-                    .slice(
-                      0,
-                      120
-                    ),
 
                 distance:
                   Math.round(
                     bestDistance
                   )
-
               };
-
             }
 
-
             return {
-
-              found:
-                true,
+              found: true,
 
               type:
-                "click",
+                'click',
 
               distance:
                 Math.round(
                   bestDistance
                 )
-
             };
-
           },
           {
-            x:
-              px,
-            y:
-              py
+            x: px,
+            y: py
           }
         );
 
-
       console.log(
-        "Resultado clique:",
+        'Resultado clique:',
         target
       );
 
-
       if (
         target.found &&
-        target.type === "link" &&
+        target.type === 'link' &&
         target.href
       ) {
-
-        const targetUrl =
-          validUrl(
+        const result =
+          await navigateSafe(
+            page,
             target.href
           );
 
-
-        if (targetUrl) {
-
-          console.log(
-            "Abrindo link:",
-            targetUrl.toString()
+        if (!result.ok) {
+          return showMessage(
+            page,
+            res,
+            'Link indisponivel',
+            result.reason
           );
-
-
-          const result =
-            await navigateSafe(
-              page,
-              targetUrl.toString()
-            );
-
-
-          if (!result.ok) {
-
-            return await showMessage(
-              page,
-              res,
-              "Link indisponivel",
-              result.reason
-            );
-
-          }
-
         }
 
       } else {
-
         try {
-
           await page.mouse.click(
             px,
             py
           );
 
-
           await page.waitForTimeout(
-            700
+            600
           );
 
         } catch {}
-
       }
 
-
       console.log(
-        "Pagina atual:",
+        'Pagina atual:',
         page.url()
       );
 
-
-      return await screenshot(
+      return capture(
         page,
         res,
-        400
+        300
       );
 
-    } catch (error) {
-
+    } catch (err) {
       console.error(
-        "Erro /v5/click:",
-        error
+        '/v5/click:',
+        err.message
       );
 
-
-      return await showMessage(
+      return showMessage(
         page,
         res,
-        "Nao foi possivel clicar",
-        "Tente mover o cursor um pouco e pressione OK novamente."
+        'Nao foi possivel clicar',
+        'Mova o cursor um pouco e pressione OK novamente.'
       );
-
     }
-
   }
 );
 
-
-/* =========================================================
-   V5 BACK
-========================================================= */
-
 app.get(
-  "/v5/back",
+  '/v5/back',
   async (req, res) => {
-
     const id =
       String(
-        req.query.session || ""
+        req.query.session || ''
       ).trim();
 
-
     const session =
-      getSession(
-        id
-      );
-
+      getSession(id);
 
     if (!session) {
-
-      return res.status(404)
+      return res
+        .status(404)
         .send(
-          "Sessao nao encontrada"
+          'Sessao nao encontrada'
         );
-
     }
 
-
-    const page =
-      session.page;
-
-
     try {
+      await session.page
+        .goBack({
+          waitUntil:
+            'domcontentloaded',
 
-      await page.goBack({
-        waitUntil:
-          "domcontentloaded",
-
-        timeout:
-          15000
-      })
+          timeout:
+            15000
+        })
         .catch(
           () => null
         );
 
-
-      await waitPageReady(
-        page,
-        500
-      );
-
-
-      console.log(
-        "Voltou para:",
-        page.url()
-      );
-
-
-      return await screenshot(
-        page,
+      return capture(
+        session.page,
         res,
-        200
+        350
       );
 
-    } catch (error) {
-
+    } catch (err) {
       console.error(
-        "Erro back:",
-        error
+        '/v5/back:',
+        err.message
       );
 
-
-      return await showMessage(
-        page,
+      return showMessage(
+        session.page,
         res,
-        "Nao foi possivel voltar",
-        "Nao existe uma pagina anterior disponivel."
+        'Nao foi possivel voltar',
+        'Nao existe uma pagina anterior disponivel.'
       );
-
     }
-
   }
 );
 
-
-/* =========================================================
-   V5 FORWARD
-========================================================= */
-
 app.get(
-  "/v5/forward",
+  '/v5/forward',
   async (req, res) => {
-
     const id =
       String(
-        req.query.session || ""
+        req.query.session || ''
       ).trim();
 
-
     const session =
-      getSession(
-        id
-      );
-
+      getSession(id);
 
     if (!session) {
-
-      return res.status(404)
+      return res
+        .status(404)
         .send(
-          "Sessao nao encontrada"
+          'Sessao nao encontrada'
         );
-
     }
 
-
-    const page =
-      session.page;
-
-
     try {
+      await session.page
+        .goForward({
+          waitUntil:
+            'domcontentloaded',
 
-      await page.goForward({
-        waitUntil:
-          "domcontentloaded",
-
-        timeout:
-          15000
-      })
+          timeout:
+            15000
+        })
         .catch(
           () => null
         );
 
-
-      await waitPageReady(
-        page,
-        500
-      );
-
-
-      console.log(
-        "Avancou para:",
-        page.url()
-      );
-
-
-      return await screenshot(
-        page,
+      return capture(
+        session.page,
         res,
-        200
+        350
       );
 
-    } catch (error) {
-
+    } catch (err) {
       console.error(
-        "Erro forward:",
-        error
+        '/v5/forward:',
+        err.message
       );
 
-
-      return await showMessage(
-        page,
+      return showMessage(
+        session.page,
         res,
-        "Nao foi possivel avancar",
-        "Nao existe uma pagina seguinte disponivel."
+        'Nao foi possivel avancar',
+        'Nao existe uma pagina seguinte disponivel.'
       );
-
     }
-
   }
 );
 
-
-/* =========================================================
-   V5 SCROLL
-========================================================= */
-
 app.get(
-  "/v5/scroll",
+  '/v5/scroll',
   async (req, res) => {
-
     const id =
       String(
-        req.query.session || ""
+        req.query.session || ''
       ).trim();
 
-
     const session =
-      getSession(
-        id
-      );
-
+      getSession(id);
 
     if (!session) {
-
-      return res.status(404)
+      return res
+        .status(404)
         .send(
-          "Sessao nao encontrada"
+          'Sessao nao encontrada'
         );
-
     }
-
 
     let dy =
       Number(
         req.query.dy
       );
 
-
-    if (
-      !Number.isFinite(dy)
-    ) {
-
-      dy =
-        700;
-
+    if (!Number.isFinite(dy)) {
+      dy = 700;
     }
 
-
-    if (
-      dy > 1500
-    ) {
-
-      dy =
-        1500;
-
-    }
-
-
-    if (
-      dy < -1500
-    ) {
-
-      dy =
-        -1500;
-
-    }
-
-
-    const page =
-      session.page;
-
+    dy =
+      Math.max(
+        -1500,
+        Math.min(
+          1500,
+          dy
+        )
+      );
 
     try {
-
-      await page.evaluate(
+      await session.page.evaluate(
         amount => {
-
-          window.scrollBy({
-            top:
-              amount,
-
-            left:
-              0,
-
-            behavior:
-              "instant"
-          });
-
+          window.scrollBy(
+            0,
+            amount
+          );
         },
         dy
       );
 
-
-      await page.waitForTimeout(
-        300
-      );
-
+      await session.page
+        .waitForTimeout(
+          250
+        );
 
       const image =
-        await page.screenshot({
-          type:
-            "png",
+        await session.page
+          .screenshot({
+            type:
+              'png',
 
-          fullPage:
-            false
-        });
+            fullPage:
+              false
+          });
 
-
-      return sendImage(
+      return sendPng(
         res,
         image
       );
 
-    } catch (error) {
-
+    } catch (err) {
       console.error(
-        "Erro scroll:",
-        error
+        '/v5/scroll:',
+        err.message
       );
 
-
-      return await showMessage(
-        page,
+      return showMessage(
+        session.page,
         res,
-        "Erro na
+        'Erro na rolagem',
+        'Nao foi possivel mover a pagina.'
+      );
+    }
+  }
+);
+
+app.get(
+  '/v5/top',
+  async (req, res) => {
+    const id =
+      String(
+        req.query.session || ''
+      ).trim();
+
+    const session =
+      getSession(id);
+
+    if (!session) {
+      return res
+        .status(404)
+        .send(
+          'Sessao nao encontrada'
+        );
+    }
+
+    try {
+      await session.page
+        .evaluate(
+          () => window.scrollTo(
+            0,
+            0
+          )
+        );
+
+      await session.page
+        .waitForTimeout(
+          200
+        );
+
+      const image =
+        await session.page
+          .screenshot({
+            type:
+              'png',
+
+            fullPage:
+              false
+          });
+
+      return sendPng(
+        res,
+        image
+      );
+
+    } catch (err) {
+      console.error(
+        '/v5/top:',
+        err.message
+      );
+
+      return showMessage(
+        session.page,
+        res,
+        'Erro',
+        'Nao foi possivel ir para o topo.'
+      );
+    }
+  }
+);
+
+app.get(
+  '/v5/bottom',
+  async (req, res) => {
+    const id =
+      String(
+        req.query.session || ''
+      ).trim();
+
+    const session =
+      getSession(id);
+
+    if (!session) {
+      return res
+        .status(404)
+        .send(
+          'Sessao nao encontrada'
+        );
+    }
+
+    try {
+      await session.page
+        .evaluate(
+          () => {
+            const height =
+              Math.max(
+                document.body
+                  ? document.body.scrollHeight
+                  : 0,
+
+                document.documentElement
+                  ? document.documentElement.scrollHeight
+                  : 0
+              );
+
+            window.scrollTo(
+              0,
+              height
+            );
+          }
+        );
+
+      await session.page
+        .waitForTimeout(
+          200
+        );
+
+      const image =
+        await session.page
+          .screenshot({
+            type:
+              'png',
+
+            fullPage:
+              false
+          });
+
+      return sendPng(
+        res,
+        image
+      );
+
+    } catch (err) {
+      console.error(
+        '/v5/bottom:',
+        err.message
+      );
+
+      return showMessage(
+        session.page,
+        res,
+        'Erro',
+        'Nao foi possivel ir para o final.'
+      );
+    }
+  }
+);
+
+setInterval(
+  async () => {
+    const now =
+      Date.now();
+
+    for (
+      const [
+        id,
+        session
+      ]
+      of sessions
+    ) {
+      if (
+        now -
+        session.last >
+        30 *
+        60 *
+        1000
+      ) {
+        try {
+          await session
+            .context
+            .close();
+        } catch {}
+
+        sessions.delete(
+          id
+        );
+      }
+    }
+  },
+  60000
+);
+
+app.listen(
+  PORT,
+  '0.0.0.0',
+  () => {
+    console.log(
+      'Navegador Roku V5.1 iniciado na porta ' +
+      PORT
+    );
+  }
+);
