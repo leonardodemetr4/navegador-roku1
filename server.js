@@ -11,14 +11,9 @@ async function getBrowser() {
   if (!browser) {
     browser = await chromium.launch({
       headless: true,
-      args: [
-        "--no-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu"
-      ]
+      args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
     });
   }
-
   return browser;
 }
 
@@ -30,10 +25,7 @@ function validUrl(text) {
   try {
     const url = new URL(text);
 
-    if (
-      url.protocol !== "http:" &&
-      url.protocol !== "https:"
-    ) {
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
       return null;
     }
 
@@ -52,6 +44,19 @@ function escapeHtml(text) {
     .replace(/'/g, "&#39;");
 }
 
+function cleanXml(text) {
+  return String(text || "")
+    .replace(/<!\[CDATA\[|\]\]>/g, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 async function newSession(id) {
   const old = sessions.get(id);
 
@@ -68,19 +73,20 @@ async function newSession(id) {
       width: 1280,
       height: 720
     },
+
     locale: "pt-BR",
     ignoreHTTPSErrors: true,
+
     userAgent:
       "Mozilla/5.0 (X11; Linux x86_64) " +
-      "AppleWebKit/537.36 " +
-      "(KHTML, like Gecko) " +
+      "AppleWebKit/537.36 (KHTML, like Gecko) " +
       "Chrome/131.0.0.0 Safari/537.36"
   });
 
   const page = await context.newPage();
 
   page.setDefaultTimeout(15000);
-  page.setDefaultNavigationTimeout(30000);
+  page.setDefaultNavigationTimeout(35000);
 
   const session = {
     context,
@@ -111,8 +117,15 @@ function sendImage(res, image) {
     "no-store, no-cache, must-revalidate"
   );
 
-  res.set("Pragma", "no-cache");
-  res.set("Expires", "0");
+  res.set(
+    "Pragma",
+    "no-cache"
+  );
+
+  res.set(
+    "Expires",
+    "0"
+  );
 
   return res
     .status(200)
@@ -120,35 +133,167 @@ function sendImage(res, image) {
     .send(image);
 }
 
-async function screenshot(page, res, delay = 250) {
-  if (delay > 0) {
-    await page.waitForTimeout(delay);
+async function waitForVisualReady(
+  page,
+  maxWait = 6500
+) {
+  try {
+    await page.evaluate(() => {
+      const images =
+        Array.from(
+          document.images || []
+        );
+
+      for (const img of images) {
+        try {
+          img.loading = "eager";
+          img.decoding = "sync";
+        } catch {}
+      }
+
+      window.scrollBy(0, 1);
+      window.scrollBy(0, -1);
+    });
+  } catch {}
+
+  const start =
+    Date.now();
+
+  while (
+    Date.now() - start <
+    maxWait
+  ) {
+    try {
+      const state =
+        await page.evaluate(() => {
+          const images =
+            Array.from(
+              document.images || []
+            );
+
+          const pending =
+            images.filter(img => {
+              if (!img.src) {
+                return false;
+              }
+
+              if (!img.complete) {
+                return true;
+              }
+
+              if (
+                typeof img.naturalWidth === "number" &&
+                img.naturalWidth === 0
+              ) {
+                return true;
+              }
+
+              return false;
+            }).length;
+
+          const textLength =
+            document.body
+              ? (
+                  document.body.innerText ||
+                  ""
+                ).trim().length
+              : 0;
+
+          return {
+            pending,
+            total: images.length,
+            textLength
+          };
+        });
+
+      if (
+        state.pending === 0 &&
+        (
+          state.textLength > 20 ||
+          state.total > 0
+        )
+      ) {
+        break;
+      }
+    } catch {
+      break;
+    }
+
+    await page.waitForTimeout(
+      350
+    );
   }
 
-  const image = await page.screenshot({
-    type: "png",
-    fullPage: false
-  });
+  try {
+    await page.waitForLoadState(
+      "networkidle",
+      {
+        timeout: 1800
+      }
+    );
+  } catch {}
 
-  return sendImage(res, image);
+  await page.waitForTimeout(
+    500
+  );
 }
 
-async function openPage(page, rawUrl) {
-  const url = validUrl(rawUrl);
+async function screenshot(
+  page,
+  res,
+  delay = 0
+) {
+  if (delay > 0) {
+    await page.waitForTimeout(
+      delay
+    );
+  }
+
+  const image =
+    await page.screenshot({
+      type: "png",
+      fullPage: false,
+      animations: "disabled"
+    });
+
+  return sendImage(
+    res,
+    image
+  );
+}
+
+async function openPage(
+  page,
+  rawUrl
+) {
+  const url =
+    validUrl(rawUrl);
 
   if (!url) {
     return false;
   }
 
   try {
-    console.log("Abrindo:", url);
+    console.log(
+      "Abrindo:",
+      url
+    );
 
-    await page.goto(url, {
-      waitUntil: "domcontentloaded",
-      timeout: 30000
-    });
+    await page.goto(
+      url,
+      {
+        waitUntil:
+          "domcontentloaded",
 
-    await page.waitForTimeout(600);
+        timeout:
+          35000
+      }
+    );
+
+    await waitForVisualReady(
+      page,
+      6500
+    );
 
     return true;
   } catch (error) {
@@ -158,16 +303,26 @@ async function openPage(page, rawUrl) {
     );
 
     try {
-      return await page.evaluate(() => {
-        if (!document.body) {
-          return false;
-        }
+      await waitForVisualReady(
+        page,
+        2500
+      );
 
-        return (
-          document.body.innerText.trim().length > 10 ||
-          document.images.length > 0
-        );
-      });
+      return await page.evaluate(
+        () => {
+          if (!document.body) {
+            return false;
+          }
+
+          return (
+            (
+              document.body.innerText ||
+              ""
+            ).trim().length > 10 ||
+            document.images.length > 0
+          );
+        }
+      );
     } catch {
       return false;
     }
@@ -182,35 +337,41 @@ async function showMessage(
 ) {
   const html = `
 <!doctype html>
+
 <html>
+
 <head>
+
 <meta charset="utf-8">
 
 <style>
+
 body {
   margin: 0;
-  background: #071b2a;
-  color: white;
+  background: #f6f7f8;
+  color: #222;
   font-family: Arial, sans-serif;
 }
 
 .box {
-  margin: 120px auto;
-  width: 80%;
-  padding: 40px;
-  background: #0b2c40;
-  border: 3px solid #18c7d9;
-  border-radius: 15px;
+  width: 78%;
+  margin: 150px auto;
+  padding: 42px;
+  background: white;
+  border: 2px solid #dfe5e8;
+  border-radius: 16px;
 }
 
 h1 {
-  color: #5eeaf2;
-  font-size: 40px;
+  margin-top: 0;
+  font-size: 38px;
 }
 
 p {
-  font-size: 25px;
+  font-size: 24px;
+  line-height: 1.45;
 }
+
 </style>
 
 </head>
@@ -230,10 +391,13 @@ ${escapeHtml(message)}
 </div>
 
 </body>
+
 </html>
 `;
 
-  await page.setContent(html);
+  await page.setContent(
+    html
+  );
 
   return screenshot(
     page,
@@ -242,110 +406,264 @@ ${escapeHtml(message)}
   );
 }
 
-function cleanXml(text) {
-  return String(text || "")
-    .replace(
-      /<!\[CDATA\[|\]\]>/g,
-      ""
-    )
-    .replace(
-      /<[^>]+>/g,
-      " "
-    )
-    .replace(
-      /&amp;/g,
-      "&"
-    )
-    .replace(
-      /\s+/g,
-      " "
-    )
-    .trim();
-}
-
-async function searchWeb(query) {
+async function searchBingRss(
+  query
+) {
   const url =
     "https://www.bing.com/search" +
-    "?format=rss&q=" +
+    "?format=rss&setlang=pt-BR&q=" +
     encodeURIComponent(query);
 
-  const response = await fetch(
-    url,
-    {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 Chrome/131 Safari/537.36",
+  const controller =
+    new AbortController();
 
-        "Accept":
-          "application/rss+xml,text/xml,*/*"
-      }
+  const timeout =
+    setTimeout(
+      () => controller.abort(),
+      12000
+    );
+
+  try {
+    const response =
+      await fetch(
+        url,
+        {
+          signal:
+            controller.signal,
+
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 Chrome/131 Safari/537.36",
+
+            "Accept":
+              "application/rss+xml,text/xml,*/*"
+          }
+        }
+      );
+
+    if (!response.ok) {
+      throw new Error(
+        "Busca HTTP " +
+        response.status
+      );
     }
-  );
 
-  if (!response.ok) {
-    throw new Error(
-      "Busca HTTP " +
-      response.status
+    const xml =
+      await response.text();
+
+    const blocks =
+      xml.match(
+        /<item[\s\S]*?<\/item>/gi
+      ) || [];
+
+    const results = [];
+
+    for (
+      const item
+      of blocks.slice(0, 12)
+    ) {
+      const titleMatch =
+        item.match(
+          /<title>([\s\S]*?)<\/title>/i
+        );
+
+      const linkMatch =
+        item.match(
+          /<link>([\s\S]*?)<\/link>/i
+        );
+
+      const descMatch =
+        item.match(
+          /<description>([\s\S]*?)<\/description>/i
+        );
+
+      if (
+        !titleMatch ||
+        !linkMatch
+      ) {
+        continue;
+      }
+
+      const title =
+        cleanXml(
+          titleMatch[1]
+        );
+
+      const link =
+        cleanXml(
+          linkMatch[1]
+        );
+
+      const description =
+        descMatch
+          ? cleanXml(
+              descMatch[1]
+            )
+          : "";
+
+      if (!validUrl(link)) {
+        continue;
+      }
+
+      results.push({
+        title,
+        link,
+        description
+      });
+    }
+
+    return results;
+  } finally {
+    clearTimeout(
+      timeout
+    );
+  }
+}
+
+function fallbackResults(
+  query
+) {
+  const q =
+    query.trim();
+
+  const key =
+    q.toLowerCase();
+
+  const presets = {
+    youtube: [
+      [
+        "YouTube",
+        "https://www.youtube.com/",
+        "Vídeos, canais, música e transmissões."
+      ],
+
+      [
+        "YouTube Music",
+        "https://music.youtube.com/",
+        "Música e playlists do YouTube."
+      ],
+
+      [
+        "YouTube Help",
+        "https://support.google.com/youtube/",
+        "Ajuda oficial do YouTube."
+      ]
+    ],
+
+    facebook: [
+      [
+        "Facebook",
+        "https://www.facebook.com/",
+        "Rede social Facebook."
+      ],
+
+      [
+        "Facebook Help",
+        "https://www.facebook.com/help/",
+        "Central de ajuda do Facebook."
+      ]
+    ],
+
+    instagram: [
+      [
+        "Instagram",
+        "https://www.instagram.com/",
+        "Fotos, vídeos e perfis no Instagram."
+      ],
+
+      [
+        "Instagram Help",
+        "https://help.instagram.com/",
+        "Central de ajuda do Instagram."
+      ]
+    ],
+
+    netflix: [
+      [
+        "Netflix",
+        "https://www.netflix.com/",
+        "Site oficial da Netflix."
+      ],
+
+      [
+        "Netflix Help",
+        "https://help.netflix.com/",
+        "Central de ajuda da Netflix."
+      ]
+    ],
+
+    roku: [
+      [
+        "Roku",
+        "https://www.roku.com/",
+        "Site oficial da Roku."
+      ],
+
+      [
+        "Roku Support",
+        "https://support.roku.com/",
+        "Suporte oficial da Roku."
+      ],
+
+      [
+        "The Roku Channel",
+        "https://therokuchannel.roku.com/",
+        "Conteúdo do Roku Channel."
+      ]
+    ]
+  };
+
+  if (presets[key]) {
+    return presets[key].map(
+      item => ({
+        title: item[0],
+        link: item[1],
+        description: item[2]
+      })
     );
   }
 
-  const xml =
-    await response.text();
+  return [
+    {
+      title:
+        'Pesquisar por "' +
+        q +
+        '" no Bing',
 
-  const blocks =
-    xml.match(
-      /<item[\s\S]*?<\/item>/gi
-    ) || [];
+      link:
+        "https://www.bing.com/search?q=" +
+        encodeURIComponent(q),
 
-  const results = [];
-
-  for (const item of blocks.slice(0, 10)) {
-    const titleMatch =
-      item.match(
-        /<title>([\s\S]*?)<\/title>/i
-      );
-
-    const linkMatch =
-      item.match(
-        /<link>([\s\S]*?)<\/link>/i
-      );
-
-    const descMatch =
-      item.match(
-        /<description>([\s\S]*?)<\/description>/i
-      );
-
-    if (!titleMatch || !linkMatch) {
-      continue;
+      description:
+        "Abrir a pesquisa completa no Bing."
     }
+  ];
+}
 
-    const title =
-      cleanXml(
-        titleMatch[1]
+async function searchWeb(
+  query
+) {
+  try {
+    const results =
+      await searchBingRss(
+        query
       );
 
-    const link =
-      cleanXml(
-        linkMatch[1]
-      );
-
-    const description =
-      descMatch
-        ? cleanXml(descMatch[1])
-        : "";
-
-    if (!validUrl(link)) {
-      continue;
+    if (
+      results.length > 0
+    ) {
+      return results;
     }
-
-    results.push({
-      title,
-      link,
-      description
-    });
+  } catch (error) {
+    console.log(
+      "RSS indisponível:",
+      error.message
+    );
   }
 
-  return results;
+  return fallbackResults(
+    query
+  );
 }
 
 function searchPage(
@@ -354,23 +672,28 @@ function searchPage(
 ) {
   let cards = "";
 
-  if (results.length === 0) {
-    cards = `
-<div class="empty">
-Nenhum resultado encontrado.
-</div>
-`;
-  } else {
-    results.forEach(
-      (item, index) => {
-        cards += `
+  for (
+    let i = 0;
+    i < results.length;
+    i++
+  ) {
+    const item =
+      results[i];
+
+    cards += `
 <a
   class="result"
   href="${escapeHtml(item.link)}"
 >
 
+<div class="number">
+${i + 1}
+</div>
+
+<div class="content">
+
 <div class="title">
-${index + 1}. ${escapeHtml(item.title)}
+${escapeHtml(item.title)}
 </div>
 
 <div class="url">
@@ -381,10 +704,10 @@ ${escapeHtml(item.link)}
 ${escapeHtml(item.description)}
 </div>
 
+</div>
+
 </a>
 `;
-      }
-    );
   }
 
   return `
@@ -398,67 +721,76 @@ ${escapeHtml(item.description)}
 
 <style>
 
+* {
+  box-sizing: border-box;
+}
+
 body {
   margin: 0;
-  padding: 25px 35px 60px;
-  background: #f4f8fa;
-  color: #17394a;
+  padding: 24px 34px 60px;
+  background: #f4f6f7;
+  color: #1f343d;
   font-family: Arial, sans-serif;
 }
 
 .header {
-  background: #082a42;
-  color: white;
-  padding: 22px 28px;
-  margin-bottom: 20px;
-  border-bottom: 5px solid #18c7d9;
-  border-radius: 12px;
+  background: white;
+  border: 2px solid #e0e5e8;
+  padding: 22px 26px;
+  margin-bottom: 18px;
+  border-radius: 14px;
 }
 
 .header h1 {
-  margin: 0 0 8px;
+  margin: 0 0 5px;
   font-size: 31px;
 }
 
 .header p {
   margin: 0;
-  font-size: 20px;
-  color: #b9e9ee;
+  font-size: 21px;
+  color: #606f76;
 }
 
 .result {
-  display: block;
-  padding: 18px 20px;
-  margin-bottom: 15px;
+  display: flex;
+  gap: 18px;
   background: white;
-  border: 2px solid #d6e6eb;
-  border-radius: 10px;
-  color: #17394a;
+  color: #1f343d;
   text-decoration: none;
+  padding: 18px 20px;
+  margin-bottom: 14px;
+  border: 2px solid #e0e5e8;
+  border-radius: 13px;
+}
+
+.number {
+  min-width: 48px;
+  height: 48px;
+  line-height: 48px;
+  text-align: center;
+  background: #e9f4f7;
+  border-radius: 12px;
+  font-size: 22px;
+  font-weight: bold;
 }
 
 .title {
   font-size: 24px;
   font-weight: bold;
-  color: #075d79;
+  margin-bottom: 5px;
 }
 
 .url {
-  margin: 6px 0;
   font-size: 15px;
-  color: #23808f;
+  color: #16819a;
+  margin-bottom: 7px;
 }
 
 .description {
   font-size: 18px;
-  line-height: 1.3;
-}
-
-.empty {
-  padding: 30px;
-  background: white;
-  border-radius: 10px;
-  font-size: 24px;
+  line-height: 1.35;
+  color: #52636b;
 }
 
 </style>
@@ -491,7 +823,7 @@ app.get(
   "/",
   (req, res) => {
     res.send(
-      "<h1>Navegador Roku V5.2</h1>" +
+      "<h1>Navegador Roku V6.1</h1>" +
       "<p>Servidor online</p>"
     );
   }
@@ -502,7 +834,7 @@ app.get(
   (req, res) => {
     res.json({
       ok: true,
-      service: "roku-v5.2"
+      service: "roku-v6.1"
     });
   }
 );
@@ -551,7 +883,7 @@ app.get(
           session.page,
           res,
           "Pagina indisponivel",
-          "O site nao respondeu."
+          "O site nao respondeu ou bloqueou o navegador remoto."
         );
       }
 
@@ -562,7 +894,7 @@ app.get(
     } catch (error) {
       console.error(
         "OPEN:",
-        error.message
+        error
       );
 
       return res
@@ -607,21 +939,14 @@ app.get(
       const session =
         await newSession(id);
 
-      let results = [];
-
-      try {
-        results =
-          await searchWeb(
-            query
-          );
-      } catch (error) {
-        console.log(
-          "Erro pesquisa:",
-          error.message
+      const results =
+        await searchWeb(
+          query
         );
-      }
 
       console.log(
+        "Pesquisa:",
+        query,
         "Resultados:",
         results.length
       );
@@ -645,7 +970,7 @@ app.get(
     } catch (error) {
       console.error(
         "SEARCH:",
-        error.message
+        error
       );
 
       return res
@@ -716,7 +1041,7 @@ app.get(
       );
 
     try {
-      const link =
+      const target =
         await session.page.evaluate(
           ({ x, y }) => {
             const elements =
@@ -729,7 +1054,10 @@ app.get(
             let best = null;
             let distance = Infinity;
 
-            for (const element of elements) {
+            for (
+              const element
+              of elements
+            ) {
               const rect =
                 element.getBoundingClientRect();
 
@@ -774,7 +1102,10 @@ app.get(
               !best ||
               distance > 170
             ) {
-              return "";
+              return {
+                found: false,
+                href: ""
+              };
             }
 
             const anchor =
@@ -782,14 +1113,15 @@ app.get(
                 ? best
                 : best.closest("a");
 
-            if (
-              anchor &&
-              anchor.href
-            ) {
-              return anchor.href;
-            }
+            return {
+              found: true,
 
-            return "";
+              href:
+                anchor &&
+                anchor.href
+                  ? anchor.href
+                  : ""
+            };
           },
           {
             x: px,
@@ -797,10 +1129,13 @@ app.get(
           }
         );
 
-      if (link) {
+      if (
+        target.found &&
+        target.href
+      ) {
         await openPage(
           session.page,
-          link
+          target.href
         );
       } else {
         try {
@@ -811,10 +1146,10 @@ app.get(
               py
             );
 
-          await session.page
-            .waitForTimeout(
-              400
-            );
+          await waitForVisualReady(
+            session.page,
+            3500
+          );
         } catch {}
       }
 
@@ -825,7 +1160,7 @@ app.get(
     } catch (error) {
       console.error(
         "CLICK:",
-        error.message
+        error
       );
 
       return showMessage(
@@ -860,9 +1195,15 @@ app.get(
       await session.page.goBack({
         waitUntil:
           "domcontentloaded",
+
         timeout:
-          15000
+          18000
       });
+
+      await waitForVisualReady(
+        session.page,
+        4000
+      );
     } catch {}
 
     return screenshot(
@@ -894,9 +1235,15 @@ app.get(
       await session.page.goForward({
         waitUntil:
           "domcontentloaded",
+
         timeout:
-          15000
+          18000
       });
+
+      await waitForVisualReady(
+        session.page,
+        4000
+      );
     } catch {}
 
     return screenshot(
@@ -952,49 +1299,12 @@ app.get(
         },
         dy
       );
-    } catch {}
 
-    return screenshot(
-      session.page,
-      res,
-      150
-    );
-  }
-);
+      await session.page
+        .waitForTimeout(
+          250
+        );
 
-setInterval(
-  async () => {
-    const now =
-      Date.now();
-
-    for (
-      const [id, session]
-      of sessions
-    ) {
-      if (
-        now - session.last >
-        1800000
-      ) {
-        try {
-          await session
-            .context
-            .close();
-        } catch {}
-
-        sessions.delete(id);
-      }
-    }
-  },
-  60000
-);
-
-app.listen(
-  PORT,
-  "0.0.0.0",
-  () => {
-    console.log(
-      "Navegador Roku V5.2 iniciado na porta " +
-      PORT
-    );
-  }
-);
+      await waitForVisualReady(
+        session.page,
+   
