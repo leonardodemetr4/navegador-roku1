@@ -4,7 +4,7 @@ const { chromium } = require("playwright");
 const app = express();
 const PORT = process.env.PORT || 10000;
 const sessions = new Map();
-let browser = null;
+let browser;
 
 async function getBrowser() {
   if (!browser) {
@@ -22,7 +22,7 @@ async function getBrowser() {
 }
 
 function validSession(id) {
-  return /^[A-Za-z0-9_-]{1,50}$/.test(id || "");
+  return /^[A-Za-z0-9_-]{1,60}$/.test(id || "");
 }
 
 function validUrl(value) {
@@ -42,8 +42,8 @@ function validUrl(value) {
   }
 }
 
-function esc(value) {
-  return String(value || "")
+function esc(s) {
+  return String(s || "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -51,8 +51,8 @@ function esc(value) {
     .replace(/'/g, "&#39;");
 }
 
-function clean(value) {
-  return String(value || "")
+function clean(s) {
+  return String(s || "")
     .replace(/<!\[CDATA\[|\]\]>/g, "")
     .replace(/<[^>]+>/g, " ")
     .replace(/&amp;/g, "&")
@@ -71,29 +71,33 @@ async function createSession(id) {
     } catch {}
   }
 
-  const b = await getBrowser();
+  const context =
+    await (await getBrowser()).newContext({
+      viewport: {
+        width: 1280,
+        height: 720
+      },
 
-  const context = await b.newContext({
-    viewport: {
-      width: 1280,
-      height: 720
-    },
+      locale: "pt-BR",
+      ignoreHTTPSErrors: true,
 
-    locale: "pt-BR",
+      userAgent:
+        "Mozilla/5.0 (X11; Linux x86_64) " +
+        "AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) " +
+        "Chrome/131.0.0.0 Safari/537.36"
+    });
 
-    ignoreHTTPSErrors: true,
+  const page =
+    await context.newPage();
 
-    userAgent:
-      "Mozilla/5.0 (X11; Linux x86_64) " +
-      "AppleWebKit/537.36 " +
-      "(KHTML, like Gecko) " +
-      "Chrome/131.0.0.0 Safari/537.36"
-  });
+  page.setDefaultTimeout(
+    15000
+  );
 
-  const page = await context.newPage();
-
-  page.setDefaultTimeout(15000);
-  page.setDefaultNavigationTimeout(35000);
+  page.setDefaultNavigationTimeout(
+    35000
+  );
 
   const session = {
     context,
@@ -125,23 +129,21 @@ function getSession(id) {
 
 async function waitVisual(
   page,
-  maxWait = 4500
+  maxWait = 5000
 ) {
   try {
-    await page.evaluate(
-      () => {
-        for (
-          const img
-          of Array.from(
-            document.images || []
-          )
-        ) {
-          try {
-            img.loading = "eager";
-          } catch {}
-        }
+    await page.evaluate(() => {
+      const images =
+        Array.from(
+          document.images || []
+        );
+
+      for (const img of images) {
+        try {
+          img.loading = "eager";
+        } catch {}
       }
-    );
+    });
   } catch {}
 
   const end =
@@ -152,20 +154,16 @@ async function waitVisual(
   ) {
     try {
       const pending =
-        await page.evaluate(
-          () => {
-            return Array
-              .from(
-                document.images || []
-              )
-              .filter(
-                img =>
-                  img.src &&
-                  !img.complete
-              )
-              .length;
-          }
-        );
+        await page.evaluate(() => {
+          return Array.from(
+            document.images || []
+          ).filter(img => {
+            return (
+              img.src &&
+              !img.complete
+            );
+          }).length;
+        });
 
       if (pending === 0) {
         break;
@@ -193,7 +191,7 @@ async function waitVisual(
   );
 }
 
-async function sendShot(
+async function shot(
   page,
   res
 ) {
@@ -225,433 +223,6 @@ async function sendShot(
     .send(png);
 }
 
-function youtubeId(raw) {
-  try {
-    const u =
-      new URL(raw);
-
-    const host =
-      u.hostname.replace(
-        /^www\./,
-        ""
-      );
-
-    if (
-      host === "youtu.be"
-    ) {
-      return (
-        u.pathname
-          .split("/")
-          .filter(Boolean)[0] ||
-        ""
-      );
-    }
-
-    if (
-      host.endsWith(
-        "youtube.com"
-      )
-    ) {
-      if (
-        u.pathname === "/watch"
-      ) {
-        return (
-          u.searchParams.get("v") ||
-          ""
-        );
-      }
-
-      const parts =
-        u.pathname
-          .split("/")
-          .filter(Boolean);
-
-      if (
-        [
-          "shorts",
-          "embed",
-          "live"
-        ].includes(parts[0])
-      ) {
-        return (
-          parts[1] ||
-          ""
-        );
-      }
-    }
-  } catch {}
-
-  return "";
-}
-
-function isYoutube(raw) {
-  try {
-    const host =
-      new URL(raw)
-        .hostname
-        .replace(
-          /^www\./,
-          ""
-        );
-
-    return (
-      host === "youtu.be" ||
-      host.endsWith(
-        "youtube.com"
-      )
-    );
-  } catch {
-    return false;
-  }
-}
-
-async function youtubeMeta(
-  url,
-  id
-) {
-  let title =
-    "Video do YouTube";
-
-  let author =
-    "YouTube";
-
-  try {
-    const response =
-      await fetch(
-        "https://www.youtube.com/oembed" +
-        "?format=json&url=" +
-        encodeURIComponent(url),
-        {
-          headers: {
-            "User-Agent":
-              "Mozilla/5.0"
-          }
-        }
-      );
-
-    if (response.ok) {
-      const data =
-        await response.json();
-
-      if (data.title) {
-        title =
-          data.title;
-      }
-
-      if (
-        data.author_name
-      ) {
-        author =
-          data.author_name;
-      }
-    }
-  } catch {}
-
-  return {
-    title,
-    author,
-
-    thumb:
-      id
-        ? "https://i.ytimg.com/vi/" +
-          id +
-          "/hqdefault.jpg"
-        : ""
-  };
-}
-
-function youtubeHomeHtml() {
-  return `
-<!doctype html>
-
-<html>
-
-<head>
-
-<meta charset="utf-8">
-
-<style>
-
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  background: #f5f5f5;
-  font-family: Arial;
-  color: #202020;
-}
-
-.wrap {
-  padding: 42px 54px;
-}
-
-.hero {
-  background: white;
-  border: 2px solid #e4e4e4;
-  border-radius: 18px;
-  padding: 38px;
-}
-
-.logo {
-  font-size: 48px;
-  font-weight: bold;
-  color: #ff0033;
-}
-
-.sub {
-  font-size: 24px;
-  color: #555;
-  margin-top: 10px;
-}
-
-.card {
-  margin-top: 26px;
-  background: white;
-  border: 2px solid #e4e4e4;
-  border-radius: 16px;
-  padding: 28px;
-}
-
-h2 {
-  font-size: 30px;
-}
-
-p {
-  font-size: 22px;
-  line-height: 1.45;
-}
-
-.key {
-  background: #202020;
-  color: white;
-  padding: 7px 13px;
-  border-radius: 8px;
-  font-weight: bold;
-}
-
-</style>
-
-</head>
-
-<body>
-
-<div class="wrap">
-
-<div class="hero">
-
-<div class="logo">
-YouTube TV
-</div>
-
-<div class="sub">
-Modo otimizado para o Navegador Roku
-</div>
-
-</div>
-
-<div class="card">
-
-<h2>
-Pesquisar videos com miniaturas
-</h2>
-
-<p>
-Aperte
-<span class="key">*</span>
-e digite:
-</p>
-
-<p>
-<b>
-yt: nome do video
-</b>
-</p>
-
-<p>
-Exemplo:
-<b>
-yt: musica brasileira
-</b>
-</p>
-
-<p>
-Os resultados aparecem em cartões próprios para TV com miniaturas.
-</p>
-
-</div>
-
-</div>
-
-</body>
-
-</html>
-`;
-}
-
-function youtubeDetailHtml(
-  url,
-  meta
-) {
-  return `
-<!doctype html>
-
-<html>
-
-<head>
-
-<meta charset="utf-8">
-
-<style>
-
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  background: #f5f5f5;
-  font-family: Arial;
-  color: #202020;
-}
-
-.wrap {
-  padding: 28px 40px;
-}
-
-.card {
-  background: white;
-  border: 2px solid #e2e2e2;
-  border-radius: 16px;
-  padding: 24px;
-}
-
-img {
-  display: block;
-  width: 720px;
-  max-height: 405px;
-  object-fit: cover;
-  margin: 0 auto 20px;
-  border-radius: 12px;
-  background: #ddd;
-}
-
-h1 {
-  font-size: 31px;
-}
-
-.author {
-  font-size: 21px;
-  color: #666;
-}
-
-.note {
-  font-size: 19px;
-  line-height: 1.4;
-  color: #555;
-  margin-top: 18px;
-}
-
-a {
-  display: inline-block;
-  margin-top: 18px;
-  padding: 15px 22px;
-  background: #202020;
-  color: white;
-  text-decoration: none;
-  border-radius: 10px;
-  font-size: 20px;
-}
-
-</style>
-
-</head>
-
-<body>
-
-<div class="wrap">
-
-<div class="card">
-
-${
-  meta.thumb
-    ? `
-<img
-  src="${esc(meta.thumb)}"
->
-`
-    : ""
-}
-
-<h1>
-${esc(meta.title)}
-</h1>
-
-<div class="author">
-${esc(meta.author)}
-</div>
-
-<div class="note">
-Pagina otimizada para mostrar a miniatura corretamente na TV.
-</div>
-
-<a href="${esc(url)}">
-Abrir pagina original
-</a>
-
-</div>
-
-</div>
-
-</body>
-
-</html>
-`;
-}
-
-async function renderYoutube(
-  page,
-  url
-) {
-  const id =
-    youtubeId(url);
-
-  if (!id) {
-    await page.setContent(
-      youtubeHomeHtml(),
-      {
-        waitUntil:
-          "domcontentloaded"
-      }
-    );
-
-    return;
-  }
-
-  const meta =
-    await youtubeMeta(
-      url,
-      id
-    );
-
-  await page.setContent(
-    youtubeDetailHtml(
-      url,
-      meta
-    ),
-    {
-      waitUntil:
-        "domcontentloaded"
-    }
-  );
-
-  await waitVisual(
-    page,
-    4000
-  );
-}
-
 async function openUrl(
   page,
   raw
@@ -661,17 +232,6 @@ async function openUrl(
 
   if (!url) {
     return false;
-  }
-
-  if (
-    isYoutube(url)
-  ) {
-    await renderYoutube(
-      page,
-      url
-    );
-
-    return true;
   }
 
   try {
@@ -719,10 +279,8 @@ async function openUrl(
             (
               document.body.innerText ||
               ""
-            ).trim().length >
-              10 ||
-            document.images.length >
-              0
+            ).trim().length > 10 ||
+            document.images.length > 0
           );
         }
       );
@@ -749,9 +307,7 @@ async function searchRss(
     const url =
       "https://www.bing.com/search" +
       "?format=rss&setlang=pt-BR&q=" +
-      encodeURIComponent(
-        query
-      );
+      encodeURIComponent(query);
 
     const response =
       await fetch(
@@ -801,7 +357,7 @@ async function searchRss(
           /<link>([\s\S]*?)<\/link>/i
         );
 
-      const descriptionMatch =
+      const descMatch =
         item.match(
           /<description>([\s\S]*?)<\/description>/i
         );
@@ -831,11 +387,13 @@ async function searchRss(
         link,
 
         description:
-          descriptionMatch
+          descMatch
             ? clean(
-                descriptionMatch[1]
+                descMatch[1]
               )
-            : ""
+            : "",
+
+        thumb: ""
       });
     }
 
@@ -847,48 +405,167 @@ async function searchRss(
   }
 }
 
+async function youtubeApiSearch(
+  query
+) {
+  const key =
+    process.env.YOUTUBE_API_KEY;
+
+  if (!key) {
+    return [];
+  }
+
+  const url =
+    "https://www.googleapis.com/youtube/v3/search" +
+    "?part=snippet" +
+    "&type=video" +
+    "&maxResults=10" +
+    "&safeSearch=moderate" +
+    "&q=" +
+    encodeURIComponent(query) +
+    "&key=" +
+    encodeURIComponent(key);
+
+  const response =
+    await fetch(url);
+
+  if (!response.ok) {
+    throw new Error(
+      "YouTube API HTTP " +
+      response.status
+    );
+  }
+
+  const data =
+    await response.json();
+
+  return (
+    data.items || []
+  )
+    .map(item => {
+      const id =
+        item.id &&
+        item.id.videoId
+          ? item.id.videoId
+          : "";
+
+      const snippet =
+        item.snippet || {};
+
+      const thumbs =
+        snippet.thumbnails || {};
+
+      return {
+        title:
+          snippet.title ||
+          "Video do YouTube",
+
+        link:
+          id
+            ? "https://www.youtube.com/watch?v=" +
+              id
+            : "",
+
+        description:
+          snippet.channelTitle ||
+          "YouTube",
+
+        thumb:
+          (
+            thumbs.high &&
+            thumbs.high.url
+          ) ||
+          (
+            thumbs.medium &&
+            thumbs.medium.url
+          ) ||
+          (
+            thumbs.default &&
+            thumbs.default.url
+          ) ||
+          ""
+      };
+    })
+    .filter(item => {
+      return item.link;
+    });
+}
+
+async function youtubeSearch(
+  query
+) {
+  try {
+    const results =
+      await youtubeApiSearch(
+        query
+      );
+
+    if (
+      results.length > 0
+    ) {
+      return results;
+    }
+  } catch (error) {
+    console.log(
+      "YouTube API:",
+      error.message
+    );
+  }
+
+  try {
+    return (
+      await searchRss(
+        "site:youtube.com/watch " +
+        query
+      )
+    ).slice(0, 10);
+  } catch {
+    return [];
+  }
+}
+
 function resultsHtml(
+  title,
   query,
-  results
+  items
 ) {
   let cards = "";
 
-  results.forEach(
-    (item, index) => {
-      const id =
-        youtubeId(
-          item.link
-        );
+  if (
+    items.length === 0
+  ) {
+    cards = `
+<div class="empty">
+Nenhum resultado encontrado.
+</div>
+`;
+  } else {
+    cards =
+      items
+        .map(
+          (item, index) => {
+            const visual =
+              item.thumb
+                ? `
+<img
+  src="${esc(item.thumb)}"
+>
+`
+                : `
+<div class="num">
+${index + 1}
+</div>
+`;
 
-      const thumb =
-        id
-          ? "https://i.ytimg.com/vi/" +
-            id +
-            "/mqdefault.jpg"
-          : "";
-
-      cards += `
+            return `
 <a
-  class="result"
+  class="card"
   href="${esc(item.link)}"
 >
 
-${
-  thumb
-    ? `
-<img
-  class="thumb"
-  src="${esc(thumb)}"
->
-`
-    : `
-<div class="number">
-${index + 1}
-</div>
-`
-}
+${visual}
 
-<div class="content">
+<div class="body">
 
 <div class="title">
 ${esc(item.title)}
@@ -898,7 +575,7 @@ ${esc(item.title)}
 ${esc(item.link)}
 </div>
 
-<div class="description">
+<div class="desc">
 ${esc(item.description)}
 </div>
 
@@ -906,8 +583,10 @@ ${esc(item.description)}
 
 </a>
 `;
-    }
-  );
+          }
+        )
+        .join("");
+  }
 
   return `
 <!doctype html>
@@ -932,36 +611,40 @@ body {
   color: #1f343d;
 }
 
-.header {
+.head,
+.card,
+.empty {
   background: white;
   border: 2px solid #e0e5e8;
-  padding: 22px 26px;
-  margin-bottom: 18px;
   border-radius: 14px;
 }
 
-.header h1 {
+.head {
+  padding: 22px 26px;
+  margin-bottom: 18px;
+}
+
+.head h1 {
+  margin: 0 0 5px;
   font-size: 31px;
+}
+
+.head p {
   margin: 0;
-}
-
-.header p {
   font-size: 21px;
+  color: #606f76;
 }
 
-.result {
+.card {
   display: flex;
   gap: 18px;
-  background: white;
-  color: #1f343d;
   text-decoration: none;
+  color: #1f343d;
   padding: 16px;
   margin-bottom: 14px;
-  border: 2px solid #e0e5e8;
-  border-radius: 13px;
 }
 
-.thumb {
+.card img {
   width: 210px;
   height: 118px;
   object-fit: cover;
@@ -969,7 +652,7 @@ body {
   background: #ddd;
 }
 
-.number {
+.num {
   min-width: 48px;
   height: 48px;
   line-height: 48px;
@@ -992,9 +675,14 @@ body {
   margin-bottom: 7px;
 }
 
-.description {
+.desc {
   font-size: 18px;
   color: #52636b;
+}
+
+.empty {
+  padding: 30px;
+  font-size: 24px;
 }
 
 </style>
@@ -1003,10 +691,10 @@ body {
 
 <body>
 
-<div class="header">
+<div class="head">
 
 <h1>
-Pesquisa
+${esc(title)}
 </h1>
 
 <p>
@@ -1023,84 +711,11 @@ ${cards}
 `;
 }
 
-async function youtubeSearchResults(
-  query
-) {
-  let results = [];
-
-  try {
-    results =
-      await searchRss(
-        "site:youtube.com/watch " +
-        query
-      );
-  } catch (error) {
-    console.log(
-      "Busca YouTube:",
-      error.message
-    );
-  }
-
-  const seen =
-    new Set();
-
-  const output = [];
-
-  for (
-    const item
-    of results
-  ) {
-    const id =
-      youtubeId(
-        item.link
-      );
-
-    if (
-      !id ||
-      seen.has(id)
-    ) {
-      continue;
-    }
-
-    seen.add(id);
-
-    output.push(item);
-
-    if (
-      output.length >= 8
-    ) {
-      break;
-    }
-  }
-
-  if (
-    output.length === 0
-  ) {
-    output.push({
-      title:
-        'Pesquisar "' +
-        query +
-        '" no YouTube',
-
-      link:
-        "https://www.youtube.com/results?search_query=" +
-        encodeURIComponent(
-          query
-        ),
-
-      description:
-        "Abrir pesquisa do YouTube."
-    });
-  }
-
-  return output;
-}
-
 app.get(
   "/",
   (req, res) => {
     res.send(
-      "<h1>Navegador Roku V6.2</h1>" +
+      "<h1>Navegador Roku V6.3</h1>" +
       "<p>Servidor online</p>"
     );
   }
@@ -1112,129 +727,8 @@ app.get(
     res.json({
       ok: true,
       service:
-        "roku-v6.2"
+        "roku-v6.3"
     });
-  }
-);
-
-app.get(
-  "/v6/youtube-home",
-  async (req, res) => {
-    const id =
-      String(
-        req.query.session || ""
-      ).trim();
-
-    if (!validSession(id)) {
-      return res
-        .status(400)
-        .send(
-          "Sessao invalida"
-        );
-    }
-
-    try {
-      const session =
-        await createSession(id);
-
-      await session.page.setContent(
-        youtubeHomeHtml(),
-        {
-          waitUntil:
-            "domcontentloaded"
-        }
-      );
-
-      return sendShot(
-        session.page,
-        res
-      );
-    } catch (error) {
-      console.error(
-        "YT HOME:",
-        error
-      );
-
-      return res
-        .status(500)
-        .send(
-          "Erro interno"
-        );
-    }
-  }
-);
-
-app.get(
-  "/v6/youtube-search",
-  async (req, res) => {
-    const id =
-      String(
-        req.query.session || ""
-      ).trim();
-
-    const query =
-      String(
-        req.query.q || ""
-      ).trim();
-
-    if (!validSession(id)) {
-      return res
-        .status(400)
-        .send(
-          "Sessao invalida"
-        );
-    }
-
-    if (!query) {
-      return res
-        .status(400)
-        .send(
-          "Pesquisa vazia"
-        );
-    }
-
-    try {
-      const session =
-        await createSession(id);
-
-      const results =
-        await youtubeSearchResults(
-          query
-        );
-
-      await session.page.setContent(
-        resultsHtml(
-          "YouTube: " +
-          query,
-          results
-        ),
-        {
-          waitUntil:
-            "domcontentloaded"
-        }
-      );
-
-      await waitVisual(
-        session.page,
-        4500
-      );
-
-      return sendShot(
-        session.page,
-        res
-      );
-    } catch (error) {
-      console.error(
-        "YT SEARCH:",
-        error
-      );
-
-      return res
-        .status(500)
-        .send(
-          "Erro interno"
-        );
-    }
   }
 );
 
@@ -1281,12 +775,12 @@ app.get(
         await session.page.setContent(
           "<html><body style='font-family:Arial;padding:80px'>" +
           "<h1>Pagina indisponivel</h1>" +
-          "<p>O site nao respondeu.</p>" +
+          "<p>O site nao respondeu ou bloqueou o navegador remoto.</p>" +
           "</body></html>"
         );
       }
 
-      return sendShot(
+      return shot(
         session.page,
         res
       );
@@ -1338,24 +832,25 @@ app.get(
       const session =
         await createSession(id);
 
-      let results = [];
+      let items = [];
 
       try {
-        results =
+        items =
           await searchRss(
             query
           );
       } catch (error) {
         console.log(
-          "SEARCH RSS:",
+          "SEARCH:",
           error.message
         );
       }
 
       await session.page.setContent(
         resultsHtml(
+          "Pesquisa",
           query,
-          results
+          items
         ),
         {
           waitUntil:
@@ -1365,16 +860,90 @@ app.get(
 
       await waitVisual(
         session.page,
-        3500
+        2200
       );
 
-      return sendShot(
+      return shot(
         session.page,
         res
       );
     } catch (error) {
       console.error(
         "SEARCH:",
+        error
+      );
+
+      return res
+        .status(500)
+        .send(
+          "Erro interno"
+        );
+    }
+  }
+);
+
+app.get(
+  "/v6/youtube-search",
+  async (req, res) => {
+    const id =
+      String(
+        req.query.session || ""
+      ).trim();
+
+    const query =
+      String(
+        req.query.q || ""
+      ).trim();
+
+    if (!validSession(id)) {
+      return res
+        .status(400)
+        .send(
+          "Sessao invalida"
+        );
+    }
+
+    if (!query) {
+      return res
+        .status(400)
+        .send(
+          "Pesquisa vazia"
+        );
+    }
+
+    try {
+      const session =
+        await createSession(id);
+
+      const items =
+        await youtubeSearch(
+          query
+        );
+
+      await session.page.setContent(
+        resultsHtml(
+          "YouTube",
+          query,
+          items
+        ),
+        {
+          waitUntil:
+            "domcontentloaded"
+        }
+      );
+
+      await waitVisual(
+        session.page,
+        4500
+      );
+
+      return shot(
+        session.page,
+        res
+      );
+    } catch (error) {
+      console.error(
+        "YT SEARCH:",
         error
       );
 
@@ -1456,10 +1025,9 @@ app.get(
               );
 
             let best = null;
-            let bestDistance =
-              Infinity;
+            let distance = Infinity;
 
-             for (
+            for (
               const element
               of elements
             ) {
@@ -1491,34 +1059,31 @@ app.get(
                   )
                 );
 
-              const distance =
+              const d =
                 Math.hypot(
                   nx - x,
                   ny - y
                 );
 
               if (
-                distance <
-                bestDistance
+                d < distance
               ) {
-                bestDistance =
-                  distance;
-
-                best =
-                  element;
+                distance = d;
+                best = element;
               }
             }
 
             if (
               !best ||
-              bestDistance > 170
+              distance > 170
             ) {
               return "";
             }
 
             const anchor =
               best.tagName
-                .toLowerCase() === "a"
+                .toLowerCase() ===
+              "a"
                 ? best
                 : best.closest("a");
 
@@ -1556,7 +1121,7 @@ app.get(
         } catch {}
       }
 
-      return sendShot(
+      return shot(
         session.page,
         res
       );
@@ -1597,7 +1162,6 @@ app.get(
       await session.page.goBack({
         waitUntil:
           "domcontentloaded",
-
         timeout:
           18000
       });
@@ -1608,7 +1172,7 @@ app.get(
       );
     } catch {}
 
-    return sendShot(
+    return shot(
       session.page,
       res
     );
@@ -1637,7 +1201,6 @@ app.get(
       await session.page.goForward({
         waitUntil:
           "domcontentloaded",
-
         timeout:
           18000
       });
@@ -1648,7 +1211,7 @@ app.get(
       );
     } catch {}
 
-    return sendShot(
+    return shot(
       session.page,
       res
     );
@@ -1708,7 +1271,7 @@ app.get(
       );
     } catch {}
 
-    return sendShot(
+    return shot(
       session.page,
       res
     );
@@ -1752,12 +1315,24 @@ app.listen(
   "0.0.0.0",
   () => {
     console.log(
-      "Navegador Roku V6.2 iniciado na porta " +
+      "Navegador Roku V6.3 iniciado na porta " +
       PORT
     );
 
     console.log(
-      "Modo YouTube TV otimizado ativado"
+      "Modo universal ativado"
     );
+
+    if (
+      process.env.YOUTUBE_API_KEY
+    ) {
+      console.log(
+        "YouTube API ativada"
+      );
+    } else {
+      console.log(
+        "YouTube API sem chave - usando fallback"
+      );
+    }
   }
 );
