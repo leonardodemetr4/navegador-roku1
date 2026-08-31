@@ -18,14 +18,9 @@ async function getBrowser() {
   if (!browser) {
     browser = await chromium.launch({
       headless: true,
-      args: [
-        "--no-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu"
-      ]
+      args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
     });
   }
-
   return browser;
 }
 
@@ -36,14 +31,7 @@ function validSession(id) {
 function validUrl(value) {
   try {
     const u = new URL(value);
-
-    if (
-      u.protocol !== "http:" &&
-      u.protocol !== "https:"
-    ) {
-      return null;
-    }
-
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
     return u.toString();
   } catch {
     return null;
@@ -77,71 +65,44 @@ async function createSession(id) {
     try {
       await old.context.close();
     } catch {}
-
     sessions.delete(id);
   }
 
   const b = await getBrowser();
 
   const context = await b.newContext({
-    viewport: {
-      width: 1280,
-      height: 720
-    },
-
+    viewport: { width: 1280, height: 720 },
     locale: "pt-BR",
-
     ignoreHTTPSErrors: true,
-
     userAgent:
-      "Mozilla/5.0 (X11; Linux x86_64) " +
-      "AppleWebKit/537.36 " +
-      "(KHTML, like Gecko) " +
-      "Chrome/131.0.0.0 Safari/537.36"
+      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
+      "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
   });
 
   const page = await context.newPage();
-
   page.setDefaultTimeout(15000);
   page.setDefaultNavigationTimeout(35000);
 
-  const session = {
-    context,
-    page,
-    last: Date.now()
-  };
-
+  const session = { context, page, last: Date.now() };
   sessions.set(id, session);
 
   return session;
 }
 
 function getSession(id) {
-  if (!validSession(id)) {
-    return null;
-  }
+  if (!validSession(id)) return null;
 
   const session = sessions.get(id);
-
-  if (!session) {
-    return null;
-  }
+  if (!session) return null;
 
   session.last = Date.now();
-
   return session;
 }
 
-async function waitVisual(
-  page,
-  maxWait = 3000
-) {
+async function waitVisual(page, maxWait = 3000) {
   try {
     await page.evaluate(() => {
-      for (
-        const img
-        of Array.from(document.images || [])
-      ) {
+      for (const img of Array.from(document.images || [])) {
         try {
           img.loading = "eager";
         } catch {}
@@ -153,21 +114,13 @@ async function waitVisual(
 
   while (Date.now() < end) {
     try {
-      const pending =
-        await page.evaluate(() => {
-          return Array.from(
-            document.images || []
-          ).filter(img => {
-            return (
-              img.src &&
-              !img.complete
-            );
-          }).length;
-        });
+      const pending = await page.evaluate(() => {
+        return Array.from(document.images || []).filter(img => {
+          return img.src && !img.complete;
+        }).length;
+      });
 
-      if (pending === 0) {
-        break;
-      }
+      if (pending === 0) break;
     } catch {
       break;
     }
@@ -176,89 +129,52 @@ async function waitVisual(
   }
 
   try {
-    await page.waitForLoadState(
-      "networkidle",
-      {
-        timeout: 1200
-      }
-    );
+    await page.waitForLoadState("networkidle", { timeout: 1200 });
   } catch {}
 
   await page.waitForTimeout(250);
 }
 
 async function shot(page, res) {
-  const png =
-    await page.screenshot({
-      type: "png",
-      fullPage: false,
-      animations: "disabled"
-    });
-
-  res.set({
-    "Cache-Control":
-      "no-store, no-cache, must-revalidate",
-
-    "Pragma":
-      "no-cache",
-
-    "Expires":
-      "0"
+  const png = await page.screenshot({
+    type: "png",
+    fullPage: false,
+    animations: "disabled"
   });
 
-  return res
-    .status(200)
-    .type("png")
-    .send(png);
+  res.set({
+    "Cache-Control": "no-store, no-cache, must-revalidate",
+    "Pragma": "no-cache",
+    "Expires": "0"
+  });
+
+  return res.status(200).type("png").send(png);
 }
 
 async function openUrl(page, raw) {
   const url = validUrl(raw);
-
-  if (!url) {
-    return false;
-  }
+  if (!url) return false;
 
   try {
-    await page.goto(
-      url,
-      {
-        waitUntil:
-          "domcontentloaded",
+    await page.goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: 35000
+    });
 
-        timeout:
-          35000
-      }
-    );
-
-    await waitVisual(
-      page,
-      5000
-    );
-
+    await waitVisual(page, 5000);
     return true;
   } catch (error) {
-    console.log(
-      "Falha ao abrir:",
-      error.message
-    );
+    console.log("Falha ao abrir:", error.message);
 
     try {
-      return await page.evaluate(
-        () => {
-          if (!document.body) {
-            return false;
-          }
+      return await page.evaluate(() => {
+        if (!document.body) return false;
 
-          return (
-            (
-              document.body.innerText ||
-              ""
-            ).trim().length > 10 ||
-            document.images.length > 0
-          );
-        }
-      );
+        return (
+          (document.body.innerText || "").trim().length > 10 ||
+          document.images.length > 0
+        );
+      });
     } catch {
       return false;
     }
@@ -266,102 +182,45 @@ async function openUrl(page, raw) {
 }
 
 async function searchRss(query) {
-  const controller =
-    new AbortController();
-
-  const timer =
-    setTimeout(
-      () => controller.abort(),
-      10000
-    );
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
 
   try {
     const url =
-      "https://www.bing.com/search" +
-      "?format=rss&setlang=pt-BR&q=" +
+      "https://www.bing.com/search?format=rss&setlang=pt-BR&q=" +
       encodeURIComponent(query);
 
-    const response =
-      await fetch(
-        url,
-        {
-          signal:
-            controller.signal,
-
-          headers: {
-            "User-Agent":
-              "Mozilla/5.0 Chrome/131 Safari/537.36",
-
-            "Accept":
-              "application/rss+xml,text/xml,*/*"
-          }
-        }
-      );
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 Chrome/131 Safari/537.36",
+        "Accept": "application/rss+xml,text/xml,*/*"
+      }
+    });
 
     if (!response.ok) {
-      throw new Error(
-        "HTTP " +
-        response.status
-      );
+      throw new Error("HTTP " + response.status);
     }
 
-    const xml =
-      await response.text();
-
-    const blocks =
-      xml.match(
-        /<item[\s\S]*?<\/item>/gi
-      ) || [];
-
+    const xml = await response.text();
+    const blocks = xml.match(/<item[\s\S]*?<\/item>/gi) || [];
     const results = [];
 
-    for (
-      const item
-      of blocks.slice(0, 12)
-    ) {
-      const title =
-        item.match(
-          /<title>([\s\S]*?)<\/title>/i
-        );
+    for (const item of blocks.slice(0, 12)) {
+      const title = item.match(/<title>([\s\S]*?)<\/title>/i);
+      const link = item.match(/<link>([\s\S]*?)<\/link>/i);
+      const description = item.match(/<description>([\s\S]*?)<\/description>/i);
 
-      const link =
-        item.match(
-          /<link>([\s\S]*?)<\/link>/i
-        );
+      if (!title || !link) continue;
 
-      const description =
-        item.match(
-          /<description>([\s\S]*?)<\/description>/i
-        );
-
-      if (
-        !title ||
-        !link
-      ) {
-        continue;
-      }
-
-      const finalLink =
-        clean(link[1]);
-
-      if (!validUrl(finalLink)) {
-        continue;
-      }
+      const finalLink = clean(link[1]);
+      if (!validUrl(finalLink)) continue;
 
       results.push({
-        title:
-          clean(title[1]),
-
-        link:
-          finalLink,
-
-        description:
-          description
-            ? clean(description[1])
-            : "",
-
-        thumb:
-          ""
+        title: clean(title[1]),
+        link: finalLink,
+        description: description ? clean(description[1]) : "",
+        thumb: ""
       });
     }
 
@@ -376,452 +235,202 @@ async function youtubeSearch(query) {
     try {
       const url =
         "https://www.googleapis.com/youtube/v3/search" +
-        "?part=snippet" +
-        "&type=video" +
-        "&maxResults=10" +
-        "&safeSearch=moderate" +
-        "&q=" +
+        "?part=snippet&type=video&maxResults=10&safeSearch=moderate&q=" +
         encodeURIComponent(query) +
         "&key=" +
-        encodeURIComponent(
-          YOUTUBE_API_KEY
-        );
+        encodeURIComponent(YOUTUBE_API_KEY);
 
-      const response =
-        await fetch(url);
+      const response = await fetch(url);
 
       if (response.ok) {
-        const data =
-          await response.json();
+        const data = await response.json();
 
-        const results =
-          (data.items || [])
-            .map(item => {
-              const id =
-                item.id &&
-                item.id.videoId
-                  ? item.id.videoId
-                  : "";
+        const results = (data.items || [])
+          .map(item => {
+            const id =
+              item.id && item.id.videoId
+                ? item.id.videoId
+                : "";
 
-              const snippet =
-                item.snippet || {};
+            const snippet = item.snippet || {};
+            const thumbs = snippet.thumbnails || {};
 
-              const thumbs =
-                snippet.thumbnails || {};
+            return {
+              title: snippet.title || "Video do YouTube",
+              link: id
+                ? "https://www.youtube.com/watch?v=" + id
+                : "",
+              description: snippet.channelTitle || "YouTube",
+              thumb:
+                (thumbs.high && thumbs.high.url) ||
+                (thumbs.medium && thumbs.medium.url) ||
+                (thumbs.default && thumbs.default.url) ||
+                ""
+            };
+          })
+          .filter(item => item.link);
 
-              return {
-                title:
-                  snippet.title ||
-                  "Video do YouTube",
-
-                link:
-                  id
-                    ? "https://www.youtube.com/watch?v=" +
-                      id
-                    : "",
-
-                description:
-                  snippet.channelTitle ||
-                  "YouTube",
-
-                thumb:
-                  (
-                    thumbs.high &&
-                    thumbs.high.url
-                  ) ||
-                  (
-                    thumbs.medium &&
-                    thumbs.medium.url
-                  ) ||
-                  (
-                    thumbs.default &&
-                    thumbs.default.url
-                  ) ||
-                  ""
-              };
-            })
-            .filter(item => {
-              return item.link;
-            });
-
-        if (results.length > 0) {
-          return results;
-        }
+        if (results.length > 0) return results;
       }
     } catch (error) {
-      console.log(
-        "YouTube API:",
-        error.message
-      );
+      console.log("YouTube API:", error.message);
     }
   }
 
   try {
-    return (
-      await searchRss(
-        "site:youtube.com/watch " +
-        query
-      )
-    ).slice(0, 10);
+    return (await searchRss("site:youtube.com/watch " + query)).slice(0, 10);
   } catch {
     return [];
   }
 }
 
-function resultsHtml(
-  title,
-  query,
-  items
-) {
+function resultsHtml(title, query, items) {
   const cards =
     items.length === 0
-      ? `
-<div class="empty">
-Nenhum resultado encontrado.
-</div>
-`
+      ? `<div class="empty">Nenhum resultado encontrado.</div>`
       : items
-          .map(
-            (item, index) => {
-              const visual =
-                item.thumb
-                  ? `
-<img src="${esc(item.thumb)}">
-`
-                  : `
-<div class="num">
-${index + 1}
-</div>
-`;
+          .map((item, index) => {
+            const visual = item.thumb
+              ? `<img src="${esc(item.thumb)}">`
+              : `<div class="num">${index + 1}</div>`;
 
-              return `
-<a
-  class="card"
-  href="${esc(item.link)}"
->
-
+            return `
+<a class="card" href="${esc(item.link)}">
 ${visual}
-
 <div class="body">
-
-<div class="title">
-${esc(item.title)}
+<div class="title">${esc(item.title)}</div>
+<div class="url">${esc(item.link)}</div>
+<div class="desc">${esc(item.description)}</div>
 </div>
-
-<div class="url">
-${esc(item.link)}
-</div>
-
-<div class="desc">
-${esc(item.description)}
-</div>
-
-</div>
-
-</a>
-`;
-            }
-          )
+</a>`;
+          })
           .join("");
 
   return `
 <!doctype html>
-
 <html>
-
 <head>
-
 <meta charset="utf-8">
-
 <style>
-
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  padding: 24px 34px 60px;
-  background: #f4f6f7;
-  font-family: Arial;
-  color: #1f343d;
-}
-
-.head,
-.card,
-.empty {
-  background: white;
-  border: 2px solid #e0e5e8;
-  border-radius: 14px;
-}
-
-.head {
-  padding: 22px 26px;
-  margin-bottom: 18px;
-}
-
-.head h1 {
-  margin: 0 0 5px;
-  font-size: 31px;
-}
-
-.head p {
-  margin: 0;
-  font-size: 21px;
-  color: #606f76;
-}
-
-.card {
-  display: flex;
-  gap: 18px;
-  text-decoration: none;
-  color: #1f343d;
-  padding: 16px;
-  margin-bottom: 14px;
-}
-
-.card img {
-  width: 210px;
-  height: 118px;
-  object-fit: cover;
-  border-radius: 10px;
-}
-
-.num {
-  min-width: 48px;
-  height: 48px;
-  line-height: 48px;
-  text-align: center;
-  background: #e9f4f7;
-  border-radius: 12px;
-  font-size: 22px;
-  font-weight: bold;
-}
-
-.title {
-  font-size: 24px;
-  font-weight: bold;
-  margin-bottom: 5px;
-}
-
-.url {
-  font-size: 15px;
-  color: #16819a;
-  margin-bottom: 7px;
-}
-
-.desc {
-  font-size: 18px;
-  color: #52636b;
-}
-
-.empty {
-  padding: 30px;
-  font-size: 24px;
-}
-
+*{box-sizing:border-box}
+body{margin:0;padding:24px 34px 60px;background:#f4f6f7;font-family:Arial;color:#1f343d}
+.head,.card,.empty{background:white;border:2px solid #e0e5e8;border-radius:14px}
+.head{padding:22px 26px;margin-bottom:18px}
+.head h1{margin:0 0 5px;font-size:31px}
+.head p{margin:0;font-size:21px;color:#606f76}
+.card{display:flex;gap:18px;text-decoration:none;color:#1f343d;padding:16px;margin-bottom:14px}
+.card img{width:210px;height:118px;object-fit:cover;border-radius:10px}
+.num{min-width:48px;height:48px;line-height:48px;text-align:center;background:#e9f4f7;border-radius:12px;font-size:22px;font-weight:bold}
+.title{font-size:24px;font-weight:bold;margin-bottom:5px}
+.url{font-size:15px;color:#16819a;margin-bottom:7px}
+.desc{font-size:18px;color:#52636b}
+.empty{padding:30px;font-size:24px}
 </style>
-
 </head>
-
 <body>
-
 <div class="head">
-
-<h1>
-${esc(title)}
-</h1>
-
-<p>
-${esc(query)}
-</p>
-
+<h1>${esc(title)}</h1>
+<p>${esc(query)}</p>
 </div>
-
 ${cards}
-
 </body>
-
-</html>
-`;
+</html>`;
 }
 
 function cleanM3u(text) {
-  if (!text) {
-    return "";
-  }
+  if (!text) return "";
 
-  const lines =
-    String(text)
-      .replace(/\r/g, "")
-      .split("\n");
-
-  const output = [
-    "#EXTM3U"
-  ];
+  const lines = String(text).replace(/\r/g, "").split("\n");
+  const output = ["#EXTM3U"];
 
   let info = "";
   let count = 0;
 
   for (const raw of lines) {
-    const line =
-      raw.trim();
+    const line = raw.trim();
 
-    if (!line) {
-      continue;
-    }
+    if (!line) continue;
 
-    if (
-      line.startsWith(
-        "#EXTINF"
-      )
-    ) {
+    if (line.startsWith("#EXTINF")) {
       info = line;
       continue;
     }
 
-    if (
-      info &&
-      !line.startsWith("#")
-    ) {
+    if (info && !line.startsWith("#")) {
       output.push(info);
       output.push(line);
 
       info = "";
       count++;
 
-      if (count >= 2500) {
-        break;
-      }
+      if (count >= 2500) break;
     }
   }
 
-  if (count === 0) {
-    return "";
-  }
+  if (count === 0) return "";
 
-  console.log(
-    "IPTV itens preparados:",
-    count
-  );
-
-  return (
-    output.join("\n") +
-    "\n"
-  );
+  console.log("IPTV itens preparados:", count);
+  return output.join("\n") + "\n";
 }
 
 async function downloadIptv() {
   if (!IPTV_M3U_URL) {
-    throw new Error(
-      "IPTV_M3U_URL nao configurada"
-    );
+    throw new Error("IPTV_M3U_URL nao configurada");
   }
 
-  if (
-    iptvCache &&
-    Date.now() -
-      iptvCacheTime <
-      IPTV_CACHE_MS
-  ) {
-    console.log(
-      "IPTV usando cache"
-    );
-
+  if (iptvCache && Date.now() - iptvCacheTime < IPTV_CACHE_MS) {
+    console.log("IPTV usando cache");
     return iptvCache;
   }
 
-  const controller =
-    new AbortController();
-
-  const timer =
-    setTimeout(
-      () => controller.abort(),
-      25000
-    );
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
 
   try {
-    console.log(
-      "IPTV buscando lista..."
-    );
+    console.log("IPTV buscando lista...");
 
-    const response =
-      await fetch(
-        IPTV_M3U_URL,
-        {
-          method:
-            "GET",
+    const response = await fetch(IPTV_M3U_URL, {
+      method: "GET",
+      redirect: "follow",
+      signal: controller.signal,
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 " +
+          "Chrome/131.0.0.0 Safari/537.36",
+        "Accept":
+          "application/x-mpegURL,application/vnd.apple.mpegurl,text/plain,*/*",
+        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8"
+      }
+    });
 
-          redirect:
-            "follow",
-
-          signal:
-            controller.signal,
-
-          headers: {
-            "User-Agent":
-              "Mozilla/5.0 (Linux; Android 10) " +
-              "AppleWebKit/537.36 " +
-              "Chrome/131.0.0.0 Safari/537.36",
-
-            "Accept":
-              "application/x-mpegURL," +
-              "application/vnd.apple.mpegurl," +
-              "text/plain,*/*",
-
-            "Accept-Language":
-              "pt-BR,pt;q=0.9,en;q=0.8"
-          }
-        }
-      );
-
-    console.log(
-      "IPTV HTTP:",
-      response.status
-    );
+    console.log("IPTV HTTP:", response.status);
 
     if (!response.ok) {
       throw new Error(
-        "Servidor IPTV respondeu HTTP " +
-        response.status
+        "Servidor IPTV respondeu HTTP " + response.status
       );
     }
 
-    const text =
-      await response.text();
+    const text = await response.text();
 
-    console.log(
-      "IPTV resposta recebida:",
-      text.length,
-      "bytes"
-    );
+    console.log("IPTV resposta recebida:", text.length, "bytes");
 
     if (
       !text ||
-      (
-        !text.includes("#EXTM3U") &&
-        !text.includes("#EXTINF")
-      )
+      (!text.includes("#EXTM3U") &&
+        !text.includes("#EXTINF"))
     ) {
-      throw new Error(
-        "Resposta recebida nao parece M3U"
-      );
+      throw new Error("Resposta recebida nao parece M3U");
     }
 
-    const cleaned =
-      cleanM3u(text);
+    const cleaned = cleanM3u(text);
 
     if (!cleaned) {
-      throw new Error(
-        "Nenhum item valido encontrado na lista"
-      );
+      throw new Error("Nenhum item valido encontrado na lista");
     }
 
-    iptvCache =
-      cleaned;
-
-    iptvCacheTime =
-      Date.now();
+    iptvCache = cleaned;
+    iptvCacheTime = Date.now();
 
     return cleaned;
   } finally {
@@ -829,695 +438,350 @@ async function downloadIptv() {
   }
 }
 
-app.get(
-  "/",
-  (req, res) => {
-    res.send(
-      "<h1>Navegador Roku V6.3 + IPTV</h1>" +
-      "<p>Servidor online</p>" +
-      "<p>IPTV: /iptv/m3u</p>"
-    );
-  }
-);
+app.get("/", (req, res) => {
+  res.send(
+    "<h1>Navegador Roku V6.3 + IPTV</h1>" +
+    "<p>Servidor online</p>" +
+    "<p>IPTV: /iptv/m3u</p>"
+  );
+});
 
-app.get(
-  "/health",
-  (req, res) => {
-    res.json({
-      ok: true,
+app.get("/health", (req, res) => {
+  res.json({
+    ok: true,
+    service: "roku-v6.3-iptv",
+    iptvConfigured: Boolean(IPTV_M3U_URL),
+    sessions: sessions.size
+  });
+});
 
-      service:
-        "roku-v6.3-iptv",
+app.get("/iptv/m3u", async (req, res) => {
+  try {
+    const m3u = await downloadIptv();
 
-      iptvConfigured:
-        Boolean(
-          IPTV_M3U_URL
-        ),
-
-      sessions:
-        sessions.size
+    res.set({
+      "Content-Type":
+        "application/vnd.apple.mpegurl; charset=utf-8",
+      "Cache-Control":
+        "no-store, no-cache, must-revalidate",
+      "Pragma": "no-cache",
+      "Expires": "0"
     });
-  }
-);
 
-app.get(
-  "/iptv/m3u",
-  async (req, res) => {
-    try {
-      const m3u =
-        await downloadIptv();
+    return res.status(200).send(m3u);
+  } catch (error) {
+    console.error("IPTV ERRO:", error.message);
 
-      res.set({
-        "Content-Type":
-          "application/vnd.apple.mpegurl; charset=utf-8",
-
-        "Cache-Control":
-          "no-store, no-cache, must-revalidate",
-
-        "Pragma":
-          "no-cache",
-
-        "Expires":
-          "0"
-      });
-
+    if (error.name === "AbortError") {
       return res
-        .status(200)
-        .send(m3u);
-    } catch (error) {
-      console.error(
-        "IPTV ERRO:",
-        error.message
-      );
-
-      if (
-        error.name ===
-        "AbortError"
-      ) {
-        return res
-          .status(504)
-          .type("text/plain")
-          .send(
-            "Timeout ao conectar ao servidor IPTV"
-          );
-      }
-
-      return res
-        .status(502)
+        .status(504)
         .type("text/plain")
-        .send(
-          "Erro IPTV: " +
-          error.message
-        );
+        .send("Timeout ao conectar ao servidor IPTV");
     }
+
+    return res
+      .status(502)
+      .type("text/plain")
+      .send("Erro IPTV: " + error.message);
   }
-);
+});
 
-app.get(
-  "/v5/open",
-  async (req, res) => {
-    const id =
-      String(
-        req.query.session || ""
-      ).trim();
+app.get("/v5/open", async (req, res) => {
+  const id = String(req.query.session || "").trim();
+  const url = String(req.query.url || "").trim();
 
-    const url =
-      String(
-        req.query.url || ""
-      ).trim();
+  if (!validSession(id)) {
+    return res.status(400).send("Sessao invalida");
+  }
 
-    if (!validSession(id)) {
-      return res
-        .status(400)
-        .send(
-          "Sessao invalida"
-        );
+  if (!validUrl(url)) {
+    return res.status(400).send("URL invalida");
+  }
+
+  try {
+    const session = await createSession(id);
+    const ok = await openUrl(session.page, url);
+
+    if (!ok) {
+      await session.page.setContent(
+        "<html><body style='font-family:Arial;padding:80px'>" +
+        "<h1>Pagina indisponivel</h1>" +
+        "<p>O site nao respondeu ou bloqueou o navegador remoto.</p>" +
+        "</body></html>"
+      );
     }
 
-    if (!validUrl(url)) {
-      return res
-        .status(400)
-        .send(
-          "URL invalida"
-        );
-    }
+    return shot(session.page, res);
+  } catch (error) {
+    console.error("OPEN:", error);
+    return res.status(500).send("Erro interno");
+  }
+});
+
+app.get("/v5/search", async (req, res) => {
+  const id = String(req.query.session || "").trim();
+  const query = String(req.query.q || "").trim();
+
+  if (!validSession(id)) {
+    return res.status(400).send("Sessao invalida");
+  }
+
+  if (!query) {
+    return res.status(400).send("Pesquisa vazia");
+  }
+
+  try {
+    const session = await createSession(id);
+
+    let items = [];
 
     try {
-      const session =
-        await createSession(id);
+      items = await searchRss(query);
+    } catch {}
 
-      const ok =
-        await openUrl(
-          session.page,
-          url
-        );
+    await session.page.setContent(
+      resultsHtml("Pesquisa", query, items),
+      { waitUntil: "domcontentloaded" }
+    );
 
-      if (!ok) {
-        await session.page.setContent(
-          "<html>" +
-          "<body style='font-family:Arial;padding:80px'>" +
-          "<h1>Pagina indisponivel</h1>" +
-          "<p>O site nao respondeu ou bloqueou o navegador remoto.</p>" +
-          "</body>" +
-          "</html>"
-        );
-      }
+    await waitVisual(session.page, 2200);
 
-      return shot(
-        session.page,
-        res
-      );
-    } catch (error) {
-      console.error(
-        "OPEN:",
-        error
-      );
-
-      return res
-        .status(500)
-        .send(
-          "Erro interno"
-        );
-    }
+    return shot(session.page, res);
+  } catch (error) {
+    console.error("SEARCH:", error);
+    return res.status(500).send("Erro interno");
   }
-);
+});
 
-app.get(
-  "/v5/search",
-  async (req, res) => {
-    const id =
-      String(
-        req.query.session || ""
-      ).trim();
+app.get("/v6/youtube-search", async (req, res) => {
+  const id = String(req.query.session || "").trim();
+  const query = String(req.query.q || "").trim();
 
-    const query =
-      String(
-        req.query.q || ""
-      ).trim();
+  if (!validSession(id)) {
+    return res.status(400).send("Sessao invalida");
+  }
 
-    if (!validSession(id)) {
-      return res
-        .status(400)
-        .send(
-          "Sessao invalida"
+  if (!query) {
+    return res.status(400).send("Pesquisa vazia");
+  }
+
+  try {
+    const session = await createSession(id);
+    const items = await youtubeSearch(query);
+
+    await session.page.setContent(
+      resultsHtml("YouTube", query, items),
+      { waitUntil: "domcontentloaded" }
+    );
+
+    await waitVisual(session.page, 4000);
+
+    return shot(session.page, res);
+  } catch (error) {
+    console.error("YT SEARCH:", error);
+    return res.status(500).send("Erro interno");
+  }
+});
+
+app.get("/v5/click", async (req, res) => {
+  const session =
+    getSession(
+      String(req.query.session || "").trim()
+    );
+
+  if (!session) {
+    return res.status(404).send("Sessao nao encontrada");
+  }
+
+  const x = Number(req.query.x);
+  const y = Number(req.query.y);
+
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return res.status(400).send("Coordenadas invalidas");
+  }
+
+  try {
+    const href = await session.page.evaluate(
+      ({ x, y }) => {
+        const elements = Array.from(
+          document.querySelectorAll(
+            "a,button,input,[role='button'],[onclick]"
+          )
         );
-    }
 
-    if (!query) {
-      return res
-        .status(400)
-        .send(
-          "Pesquisa vazia"
-        );
-    }
+        let best = null;
+        let distance = Infinity;
 
-    try {
-      const session =
-        await createSession(id);
+        for (const element of elements) {
+          const rect = element.getBoundingClientRect();
 
-      let items = [];
+          if (rect.width < 2 || rect.height < 2) continue;
 
-      try {
-        items =
-          await searchRss(
-            query
+          const nx = Math.max(
+            rect.left,
+            Math.min(x, rect.right)
           );
+
+          const ny = Math.max(
+            rect.top,
+            Math.min(y, rect.bottom)
+          );
+
+          const d = Math.hypot(nx - x, ny - y);
+
+          if (d < distance) {
+            distance = d;
+            best = element;
+          }
+        }
+
+        if (!best || distance > 170) return "";
+
+        const anchor =
+          best.tagName.toLowerCase() === "a"
+            ? best
+            : best.closest("a");
+
+        return anchor && anchor.href
+          ? anchor.href
+          : "";
+      },
+      {
+        x: Math.max(0, Math.min(1279, Math.round(x))),
+        y: Math.max(0, Math.min(719, Math.round(y)))
+      }
+    );
+
+    if (href) {
+      await openUrl(session.page, href);
+    } else {
+      await session.page.mouse.click(
+        Math.max(0, Math.min(1279, Math.round(x))),
+        Math.max(0, Math.min(719, Math.round(y)))
+      );
+
+      await waitVisual(session.page, 1800);
+    }
+
+    return shot(session.page, res);
+  } catch (error) {
+    console.error("CLICK:", error);
+    return res.status(500).send("Erro interno");
+  }
+});
+
+app.get("/v5/back", async (req, res) => {
+  const session =
+    getSession(
+      String(req.query.session || "").trim()
+    );
+
+  if (!session) {
+    return res.status(404).send("Sessao nao encontrada");
+  }
+
+  try {
+    await session.page.goBack({
+      waitUntil: "domcontentloaded",
+      timeout: 18000
+    });
+
+    await waitVisual(session.page, 2000);
+  } catch {}
+
+  return shot(session.page, res);
+});
+
+app.get("/v5/forward", async (req, res) => {
+  const session =
+    getSession(
+      String(req.query.session || "").trim()
+    );
+
+  if (!session) {
+    return res.status(404).send("Sessao nao encontrada");
+  }
+
+  try {
+    await session.page.goForward({
+      waitUntil: "domcontentloaded",
+      timeout: 18000
+    });
+
+    await waitVisual(session.page, 2000);
+  } catch {}
+
+  return shot(session.page, res);
+});
+
+app.get("/v5/scroll", async (req, res) => {
+  const session =
+    getSession(
+      String(req.query.session || "").trim()
+    );
+
+  if (!session) {
+    return res.status(404).send("Sessao nao encontrada");
+  }
+
+  let dy = Number(req.query.dy);
+
+  if (!Number.isFinite(dy)) {
+    dy = 700;
+  }
+
+  dy = Math.max(-1500, Math.min(1500, dy));
+
+  try {
+    await session.page.evaluate(
+      amount => window.scrollBy(0, amount),
+      dy
+    );
+
+    await waitVisual(session.page, 800);
+  } catch {}
+
+  return shot(session.page, res);
+});
+
+setInterval(async () => {
+  const now = Date.now();
+
+  for (const [id, session] of sessions) {
+    if (
+      now - session.last >
+      30 * 60 * 1000
+    ) {
+      try {
+        await session.context.close();
       } catch {}
 
-      await session.page.setContent(
-        resultsHtml(
-          "Pesquisa",
-          query,
-          items
-        ),
-        {
-          waitUntil:
-            "domcontentloaded"
-        }
-      );
-
-      await waitVisual(
-        session.page,
-        2200
-      );
-
-      return shot(
-        session.page,
-        res
-      );
-    } catch (error) {
-      console.error(
-        "SEARCH:",
-        error
-      );
-
-      return res
-        .status(500)
-        .send(
-          "Erro interno"
-        );
+      sessions.delete(id);
     }
   }
-);
+}, 60000);
 
-app.get(
-  "/v6/youtube-search",
-  async (req, res) => {
-    const id =
-      String(
-        req.query.session || ""
-      ).trim();
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(
+    "Navegador Roku V6.3 + IPTV iniciado na porta " +
+    PORT
+  );
 
-    const query =
-      String(
-        req.query.q || ""
-      ).trim();
+  console.log("Modo universal ativado");
 
-    if (!validSession(id)) {
-      return res
-        .status(400)
-        .send(
-          "Sessao invalida"
-        );
-    }
-
-    if (!query) {
-      return res
-        .status(400)
-        .send(
-          "Pesquisa vazia"
-        );
-    }
-
-    try {
-      const session =
-        await createSession(id);
-
-      const items =
-        await youtubeSearch(
-          query
-        );
-
-      await session.page.setContent(
-        resultsHtml(
-          "YouTube",
-          query,
-          items
-        ),
-        {
-          waitUntil:
-            "domcontentloaded"
-        }
-      );
-
-      await waitVisual(
-        session.page,
-        4000
-      );
-
-      return shot(
-        session.page,
-        res
-      );
-    } catch (error) {
-      console.error(
-        "YT SEARCH:",
-        error
-      );
-
-      return res
-        .status(500)
-        .send(
-          "Erro interno"
-        );
-    }
-  }
-);
-
-app.get(
-  "/v5/click",
-  async (req, res) => {
-    const session =
-      getSession(
-        String(
-          req.query.session || ""
-        ).trim()
-      );
-
-    if (!session) {
-      return res
-        .status(404)
-        .send(
-          "Sessao nao encontrada"
-        );
-    }
-
-    const x =
-      Number(
-        req.query.x
-      );
-
-    const y =
-      Number(
-        req.query.y
-      );
-
-    if (
-      !Number.isFinite(x) ||
-      !Number.isFinite(y)
-    ) {
-      return res
-        .status(400)
-        .send(
-          "Coordenadas invalidas"
-        );
-    }
-
-    const px =
-      Math.max(
-        0,
-        Math.min(
-          1279,
-          Math.round(x)
-        )
-      );
-
-    const py =
-      Math.max(
-        0,
-        Math.min(
-          719,
-          Math.round(y)
-        )
-      );
-
-    try {
-      const href =
-        await session.page.evaluate(
-          ({ x, y }) => {
-            const elements =
-              Array.from(
-                document.querySelectorAll(
-                  "a,button,input,[role='button'],[onclick]"
-                )
-              );
-
-            let best = null;
-            let distance =
-              Infinity;
-
-            for (
-              const element
-              of elements
-            ) {
-              const rect =
-                element.getBoundingClientRect();
-
-              if (
-                rect.width < 2 ||
-                rect.height < 2
-              ) {
-                continue;
-              }
-
-              const nx =
-                Math.max(
-                  rect.left,
-                  Math.min(
-                    x,
-                    rect.right
-                  )
-                );
-
-              const ny =
-                Math.max(
-                  rect.top,
-                  Math.min(
-                    y,
-                    rect.bottom
-                  )
-                );
-
-              const d =
-                Math.hypot(
-                  nx - x,
-                  ny - y
-                );
-
-              if (
-                d < distance
-              ) {
-                distance = d;
-                best = element;
-              }
-            }
-
-            if (
-              !best ||
-              distance > 170
-                      ) {
-              return "";
-            }
-
-            const anchor =
-              best.tagName
-                .toLowerCase() ===
-              "a"
-                ? best
-                : best.closest("a");
-
-            return (
-              anchor &&
-              anchor.href
-                ? anchor.href
-                : ""
-            );
-          },
-          {
-            x: px,
-            y: py
-          }
-        );
-
-      if (href) {
-        await openUrl(
-          session.page,
-          href
-        );
-      } else {
-        await session.page
-          .mouse
-          .click(
-            px,
-            py
-          );
-
-        await waitVisual(
-          session.page,
-          1800
-        );
-      }
-
-      return shot(
-        session.page,
-        res
-      );
-    } catch (error) {
-      console.error(
-        "CLICK:",
-        error
-      );
-
-      return res
-        .status(500)
-        .send(
-          "Erro interno"
-        );
-    }
-  }
-);
-
-app.get(
-  "/v5/back",
-  async (req, res) => {
-    const session =
-      getSession(
-        String(
-          req.query.session || ""
-        ).trim()
-      );
-
-    if (!session) {
-      return res
-        .status(404)
-        .send(
-          "Sessao nao encontrada"
-        );
-    }
-
-    try {
-      await session.page.goBack({
-        waitUntil:
-          "domcontentloaded",
-
-        timeout:
-          18000
-      });
-
-      await waitVisual(
-        session.page,
-        2000
-      );
-    } catch {}
-
-    return shot(
-      session.page,
-      res
-    );
-  }
-);
-
-app.get(
-  "/v5/forward",
-  async (req, res) => {
-    const session =
-      getSession(
-        String(
-          req.query.session || ""
-        ).trim()
-      );
-
-    if (!session) {
-      return res
-        .status(404)
-        .send(
-          "Sessao nao encontrada"
-        );
-    }
-
-    try {
-      await session.page.goForward({
-        waitUntil:
-          "domcontentloaded",
-
-        timeout:
-          18000
-      });
-
-      await waitVisual(
-        session.page,
-        2000
-      );
-    } catch {}
-
-    return shot(
-      session.page,
-      res
-    );
-  }
-);
-
-app.get(
-  "/v5/scroll",
-  async (req, res) => {
-    const session =
-      getSession(
-        String(
-          req.query.session || ""
-        ).trim()
-      );
-
-    if (!session) {
-      return res
-        .status(404)
-        .send(
-          "Sessao nao encontrada"
-        );
-    }
-
-    let dy =
-      Number(
-        req.query.dy
-      );
-
-    if (!Number.isFinite(dy)) {
-      dy = 700;
-    }
-
-    dy =
-      Math.max(
-        -1500,
-        Math.min(
-          1500,
-          dy
-        )
-      );
-
-    try {
-      await session.page.evaluate(
-        amount => {
-          window.scrollBy(
-            0,
-            amount
-          );
-        },
-        dy
-      );
-
-      await waitVisual(
-        session.page,
-        800
-      );
-    } catch {}
-
-    return shot(
-      session.page,
-      res
-    );
-  }
-);
-
-setInterval(
-  async () => {
-    const now =
-      Date.now();
-
-    for (
-      const [
-        id,
-        session
-      ]
-      of sessions
-    ) {
-      if (
-        now -
-          session.last >
-        30 * 60 * 1000
-      ) {
-        try {
-          await session
-            .context
-            .close();
-        } catch {}
-
-        sessions.delete(id);
-      }
-    }
-  },
-  60000
-);
-
-app.listen(
-  PORT,
-  "0.0.0.0",
-  () => {
+  if (YOUTUBE_API_KEY) {
+    console.log("YouTube API ativada");
+  } else {
     console.log(
-      "Navegador Roku V6.3 + IPTV iniciado na porta " +
-      PORT
+      "YouTube API sem chave - usando fallback"
     );
-
-    console.log(
-      "Modo universal ativado"
-    );
-
-    if (YOUTUBE_API_KEY) {
-      console.log(
-        "YouTube API ativada"
-      );
-    } else {
-      console.log(
-        "YouTube API sem chave - usando fallback"
-      );
-    }
-
-    if (IPTV_M3U_URL) {
-      console.log(
-        "IPTV_M3U_URL configurada"
-      );
-    } else {
-      console.log(
-        "ATENCAO: IPTV_M3U_URL nao configurada"
-      );
-    }
   }
-);
+
+  if (IPTV_M3U_URL) {
+    console.log("IPTV_M3U_URL configurada");
+  } else {
+    console.log(
+      "ATENCAO: IPTV_M3U_URL nao configurada"
+    );
+  }
+});
