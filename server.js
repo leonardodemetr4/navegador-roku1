@@ -5,25 +5,23 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 
 const sessions = new Map();
-let browser;
+let browser = null;
 
 // ============================================================
 // IPTV
 // ============================================================
 
-const IPTV_M3U_URL =
-  process.env.IPTV_M3U_URL || "";
+const IPTV_M3U_URL = process.env.IPTV_M3U_URL || "";
 
 let iptvCache = {
   text: "",
   time: 0
 };
 
-const IPTV_CACHE_TIME =
-  5 * 60 * 1000;
+const IPTV_CACHE_TIME = 5 * 60 * 1000;
 
 // ============================================================
-// NAVEGADOR
+// NAVEGADOR - FUNCOES
 // ============================================================
 
 async function getBrowser() {
@@ -73,7 +71,7 @@ function esc(s) {
 
 function clean(s) {
   return String(s || "")
-    .replace(/<!\[CDATA\[|\]\]>/g, "")
+    .replace(/<!CDATA\[|\]>/g, "")
     .replace(/<[^>]+>/g, " ")
     .replace(/&amp;/g, "&")
     .replace(/&quot;/g, '"')
@@ -89,35 +87,33 @@ async function createSession(id) {
     try {
       await old.context.close();
     } catch {}
+
+    sessions.delete(id);
   }
 
-  const context =
-    await (await getBrowser()).newContext({
-      viewport: {
-        width: 1280,
-        height: 720
-      },
+  const browserInstance = await getBrowser();
 
-      locale: "pt-BR",
-      ignoreHTTPSErrors: true,
+  const context = await browserInstance.newContext({
+    viewport: {
+      width: 1280,
+      height: 720
+    },
 
-      userAgent:
-        "Mozilla/5.0 (X11; Linux x86_64) " +
-        "AppleWebKit/537.36 " +
-        "(KHTML, like Gecko) " +
-        "Chrome/131.0.0.0 Safari/537.36"
-    });
+    locale: "pt-BR",
 
-  const page =
-    await context.newPage();
+    ignoreHTTPSErrors: true,
 
-  page.setDefaultTimeout(
-    15000
-  );
+    userAgent:
+      "Mozilla/5.0 (X11; Linux x86_64) " +
+      "AppleWebKit/537.36 " +
+      "(KHTML, like Gecko) " +
+      "Chrome/131.0.0.0 Safari/537.36"
+  });
 
-  page.setDefaultNavigationTimeout(
-    35000
-  );
+  const page = await context.newPage();
+
+  page.setDefaultTimeout(15000);
+  page.setDefaultNavigationTimeout(35000);
 
   const session = {
     context,
@@ -125,38 +121,31 @@ async function createSession(id) {
     last: Date.now()
   };
 
-  sessions.set(
-    id,
-    session
-  );
+  sessions.set(id, session);
 
   return session;
 }
 
 function getSession(id) {
-  const session =
-    sessions.get(id);
+  if (!validSession(id)) {
+    return null;
+  }
+
+  const session = sessions.get(id);
 
   if (!session) {
     return null;
   }
 
-  session.last =
-    Date.now();
+  session.last = Date.now();
 
   return session;
 }
 
-async function waitVisual(
-  page,
-  maxWait = 5000
-) {
+async function waitVisual(page, maxWait = 5000) {
   try {
     await page.evaluate(() => {
-      const images =
-        Array.from(
-          document.images || []
-        );
+      const images = Array.from(document.images || []);
 
       for (const img of images) {
         try {
@@ -166,24 +155,15 @@ async function waitVisual(
     });
   } catch {}
 
-  const end =
-    Date.now() + maxWait;
+  const end = Date.now() + maxWait;
 
-  while (
-    Date.now() < end
-  ) {
+  while (Date.now() < end) {
     try {
-      const pending =
-        await page.evaluate(() => {
-          return Array.from(
-            document.images || []
-          ).filter(img => {
-            return (
-              img.src &&
-              !img.complete
-            );
-          }).length;
-        });
+      const pending = await page.evaluate(() => {
+        return Array.from(document.images || []).filter(img => {
+          return img.src && !img.complete;
+        }).length;
+      });
 
       if (pending === 0) {
         break;
@@ -192,50 +172,32 @@ async function waitVisual(
       break;
     }
 
-    await page.waitForTimeout(
-      300
-    );
+    await page.waitForTimeout(300);
   }
 
   try {
-    await page.waitForLoadState(
-      "networkidle",
-      {
-        timeout: 1500
-      }
-    );
+    await page.waitForLoadState("networkidle", {
+      timeout: 1500
+    });
   } catch {}
 
-  await page.waitForTimeout(
-    350
-  );
+  await page.waitForTimeout(350);
 }
 
-async function shot(
-  page,
-  res
-) {
-  const png =
-    await page.screenshot({
-      type: "png",
-      fullPage: false,
-      animations: "disabled"
-    });
+async function shot(page, res) {
+  const png = await page.screenshot({
+    type: "png",
+    fullPage: false,
+    animations: "disabled"
+  });
 
   res.set(
     "Cache-Control",
     "no-store, no-cache, must-revalidate"
   );
 
-  res.set(
-    "Pragma",
-    "no-cache"
-  );
-
-  res.set(
-    "Expires",
-    "0"
-  );
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
 
   return res
     .status(200)
@@ -243,38 +205,22 @@ async function shot(
     .send(png);
 }
 
-async function openUrl(
-  page,
-  raw
-) {
-  const url =
-    validUrl(raw);
+async function openUrl(page, raw) {
+  const url = validUrl(raw);
 
   if (!url) {
     return false;
   }
 
   try {
-    console.log(
-      "Abrindo:",
-      url
-    );
+    console.log("Abrindo:", url);
 
-    await page.goto(
-      url,
-      {
-        waitUntil:
-          "domcontentloaded",
+    await page.goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: 35000
+    });
 
-        timeout:
-          35000
-      }
-    );
-
-    await waitVisual(
-      page,
-      6000
-    );
+    await waitVisual(page, 6000);
 
     return true;
   } catch (error) {
@@ -284,44 +230,34 @@ async function openUrl(
     );
 
     try {
-      await waitVisual(
-        page,
-        1800
-      );
+      await waitVisual(page, 1800);
 
-      return await page.evaluate(
-        () => {
-          if (!document.body) {
-            return false;
-          }
-
-          return (
-            (
-              document.body.innerText ||
-              ""
-            ).trim().length > 10 ||
-            document.images.length > 0
-          );
+      return await page.evaluate(() => {
+        if (!document.body) {
+          return false;
         }
-      );
+
+        return (
+          (document.body.innerText || "").trim().length > 10 ||
+          document.images.length > 0
+        );
+      });
     } catch {
       return false;
     }
   }
 }
 
-async function searchRss(
-  query
-) {
-  const controller =
-    new AbortController();
+// ============================================================
+// PESQUISA
+// ============================================================
 
-  const timer =
-    setTimeout(
-      () =>
-        controller.abort(),
-      10000
-    );
+async function searchRss(query) {
+  const controller = new AbortController();
+
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, 10000);
 
   try {
     const url =
@@ -329,32 +265,25 @@ async function searchRss(
       "?format=rss&setlang=pt-BR&q=" +
       encodeURIComponent(query);
 
-    const response =
-      await fetch(
-        url,
-        {
-          signal:
-            controller.signal,
+    const response = await fetch(url, {
+      signal: controller.signal,
 
-          headers: {
-            "User-Agent":
-              "Mozilla/5.0 Chrome/131 Safari/537.36",
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 Chrome/131 Safari/537.36",
 
-            "Accept":
-              "application/rss+xml,text/xml,*/*"
-          }
-        }
-      );
+        "Accept":
+          "application/rss+xml,text/xml,*/*"
+      }
+    });
 
     if (!response.ok) {
       throw new Error(
-        "HTTP " +
-        response.status
+        "HTTP " + response.status
       );
     }
 
-    const xml =
-      await response.text();
+    const xml = await response.text();
 
     const items =
       xml.match(
@@ -363,10 +292,7 @@ async function searchRss(
 
     const results = [];
 
-    for (
-      const item
-      of items.slice(0, 12)
-    ) {
+    for (const item of items.slice(0, 12)) {
       const titleMatch =
         item.match(
           /<title>([\s\S]*?)<\/title>/i
@@ -390,9 +316,7 @@ async function searchRss(
       }
 
       const link =
-        clean(
-          linkMatch[1]
-        );
+        clean(linkMatch[1]);
 
       if (!validUrl(link)) {
         continue;
@@ -400,17 +324,13 @@ async function searchRss(
 
       results.push({
         title:
-          clean(
-            titleMatch[1]
-          ),
+          clean(titleMatch[1]),
 
         link,
 
         description:
           descMatch
-            ? clean(
-                descMatch[1]
-              )
+            ? clean(descMatch[1])
             : "",
 
         thumb: ""
@@ -419,15 +339,15 @@ async function searchRss(
 
     return results;
   } finally {
-    clearTimeout(
-      timer
-    );
+    clearTimeout(timer);
   }
 }
 
-async function youtubeApiSearch(
-  query
-) {
+// ============================================================
+// YOUTUBE
+// ============================================================
+
+async function youtubeApiSearch(query) {
   const key =
     process.env.YOUTUBE_API_KEY;
 
@@ -459,9 +379,7 @@ async function youtubeApiSearch(
   const data =
     await response.json();
 
-  return (
-    data.items || []
-  )
+  return (data.items || [])
     .map(item => {
       const id =
         item.id &&
@@ -482,8 +400,7 @@ async function youtubeApiSearch(
 
         link:
           id
-            ? "https://www.youtube.com/watch?v=" +
-              id
+            ? "https://www.youtube.com/watch?v=" + id
             : "",
 
         description:
@@ -491,834 +408,4 @@ async function youtubeApiSearch(
           "YouTube",
 
         thumb:
-          (
-            thumbs.high &&
-            thumbs.high.url
-          ) ||
-          (
-            thumbs.medium &&
-            thumbs.medium.url
-          ) ||
-          (
-            thumbs.default &&
-            thumbs.default.url
-          ) ||
-          ""
-      };
-    })
-    .filter(item => {
-      return item.link;
-    });
-}
-
-async function youtubeSearch(
-  query
-) {
-  try {
-    const results =
-      await youtubeApiSearch(
-        query
-      );
-
-    if (
-      results.length > 0
-    ) {
-      return results;
-    }
-  } catch (error) {
-    console.log(
-      "YouTube API:",
-      error.message
-    );
-  }
-
-  try {
-    return (
-      await searchRss(
-        "site:youtube.com/watch " +
-        query
-      )
-    ).slice(0, 10);
-  } catch {
-    return [];
-  }
-}
-
-function resultsHtml(
-  title,
-  query,
-  items
-) {
-  let cards = "";
-
-  if (
-    items.length === 0
-  ) {
-    cards = `
-<div class="empty">
-Nenhum resultado encontrado.
-</div>
-`;
-  } else {
-    cards =
-      items
-        .map(
-          (item, index) => {
-            const visual =
-              item.thumb
-                ? `
-<img
-  src="${esc(item.thumb)}"
->
-`
-                : `
-<div class="num">
-${index + 1}
-</div>
-`;
-
-            return `
-<a
-  class="card"
-  href="${esc(item.link)}"
->
-
-${visual}
-
-<div class="body">
-
-<div class="title">
-${esc(item.title)}
-</div>
-
-<div class="url">
-${esc(item.link)}
-</div>
-
-<div class="desc">
-${esc(item.description)}
-</div>
-
-</div>
-
-</a>
-`;
-          }
-        )
-        .join("");
-  }
-
-  return `
-<!doctype html>
-
-<html>
-
-<head>
-
-<meta charset="utf-8">
-
-<style>
-
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  padding: 24px 34px 60px;
-  background: #f4f6f7;
-  font-family: Arial;
-  color: #1f343d;
-}
-
-.head,
-.card,
-.empty {
-  background: white;
-  border: 2px solid #e0e5e8;
-  border-radius: 14px;
-}
-
-.head {
-  padding: 22px 26px;
-  margin-bottom: 18px;
-}
-
-.head h1 {
-  margin: 0 0 5px;
-  font-size: 31px;
-}
-
-.head p {
-  margin: 0;
-  font-size: 21px;
-  color: #606f76;
-}
-
-.card {
-  display: flex;
-  gap: 18px;
-  text-decoration: none;
-  color: #1f343d;
-  padding: 16px;
-  margin-bottom: 14px;
-}
-
-.card img {
-  width: 210px;
-  height: 118px;
-  object-fit: cover;
-  border-radius: 10px;
-  background: #ddd;
-}
-
-.num {
-  min-width: 48px;
-  height: 48px;
-  line-height: 48px;
-  text-align: center;
-  background: #e9f4f7;
-  border-radius: 12px;
-  font-size: 22px;
-  font-weight: bold;
-}
-
-.title {
-  font-size: 24px;
-  font-weight: bold;
-  margin-bottom: 5px;
-}
-
-.url {
-  font-size: 15px;
-  color: #16819a;
-  margin-bottom: 7px;
-}
-
-.desc {
-  font-size: 18px;
-  color: #52636b;
-}
-
-.empty {
-  padding: 30px;
-  font-size: 24px;
-}
-
-</style>
-
-</head>
-
-<body>
-
-<div class="head">
-
-<h1>
-${esc(title)}
-</h1>
-
-<p>
-${esc(query)}
-</p>
-
-</div>
-
-${cards}
-
-</body>
-
-</html>
-`;
-}
-
-// ============================================================
-// IPTV
-// ============================================================
-
-function cleanM3u(text) {
-  if (
-    !text ||
-    typeof text !== "string"
-  ) {
-    return "";
-  }
-
-  const lines =
-    text
-      .replace(/\r/g, "")
-      .split("\n");
-
-  const output = [
-    "#EXTM3U"
-  ];
-
-  let extinf = "";
-  let total = 0;
-
-  const MAX_ITEMS =
-    2500;
-
-  for (
-    const raw
-    of lines
-  ) {
-    const line =
-      raw.trim();
-
-    if (!line) {
-      continue;
-    }
-
-    if (
-      line.startsWith(
-        "#EXTINF"
-      )
-    ) {
-      extinf = line;
-      continue;
-    }
-
-    if (
-      extinf &&
-      !line.startsWith("#")
-    ) {
-      output.push(
-        extinf
-      );
-
-      output.push(
-        line
-      );
-
-      extinf = "";
-
-      total++;
-
-      if (
-        total >=
-        MAX_ITEMS
-      ) {
-        break;
-      }
-    }
-  }
-
-  if (
-    total === 0
-  ) {
-    return "";
-  }
-
-  return (
-    output.join("\n") +
-    "\n"
-  );
-}
-
-async function downloadIptvList() {
-  if (
-    !IPTV_M3U_URL
-  ) {
-    throw new Error(
-      "IPTV_M3U_URL nao configurada"
-    );
-  }
-
-  const now =
-    Date.now();
-
-  if (
-    iptvCache.text &&
-    now -
-      iptvCache.time <
-      IPTV_CACHE_TIME
-  ) {
-    console.log(
-      "IPTV: usando cache"
-    );
-
-    return iptvCache.text;
-  }
-
-  console.log(
-    "IPTV: buscando lista..."
-  );
-
-  const controller =
-    new AbortController();
-
-  const timeout =
-    setTimeout(
-      () => {
-        controller.abort();
-      },
-      25000
-    );
-
-  try {
-    const response =
-      await fetch(
-        IPTV_M3U_URL,
-        {
-          method: "GET",
-
-          redirect:
-            "follow",
-
-          signal:
-            controller.signal,
-
-          headers: {
-            "User-Agent":
-              "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
-
-            "Accept":
-              "application/x-mpegURL,application/vnd.apple.mpegurl,text/plain,*/*",
-
-            "Accept-Language":
-              "pt-BR,pt;q=0.9,en;q=0.8",
-
-            "Connection":
-              "close"
-          }
-        }
-      );
-
-    console.log(
-      "IPTV HTTP:",
-      response.status
-    );
-
-    if (
-      !response.ok
-    ) {
-      throw new Error(
-        "Servidor IPTV HTTP " +
-        response.status
-      );
-    }
-
-    const text =
-      await response.text();
-
-    console.log(
-      "IPTV bytes recebidos:",
-      text.length
-    );
-
-    if (
-      !text ||
-      (
-        !text.includes(
-          "#EXTM3U"
-        ) &&
-        !text.includes(
-          "#EXTINF"
-        )
-      )
-    ) {
-      throw new Error(
-        "Resposta nao parece M3U"
-      );
-    }
-
-    const cleaned =
-      cleanM3u(text);
-
-    if (!cleaned) {
-      throw new Error(
-        "Nenhum item IPTV valido encontrado"
-      );
-    }
-
-    iptvCache = {
-      text: cleaned,
-      time: Date.now()
-    };
-
-    return cleaned;
-  } finally {
-    clearTimeout(
-      timeout
-    );
-  }
-}
-
-// ============================================================
-// ROTAS PRINCIPAIS
-// ============================================================
-
-app.get(
-  "/",
-  (req, res) => {
-    res.send(
-      "<h1>Navegador Roku V6.3 + IPTV</h1>" +
-      "<p>Servidor online</p>" +
-      "<p>IPTV: /iptv/m3u</p>"
-    );
-  }
-);
-
-app.get(
-  "/health",
-  (req, res) => {
-    res.json({
-      ok: true,
-
-      service:
-        "roku-v6.3-iptv",
-
-      iptvConfigured:
-        Boolean(
-          IPTV_M3U_URL
-        ),
-
-      sessions:
-        sessions.size
-    });
-  }
-);
-
-// ============================================================
-// ROTA IPTV
-// ============================================================
-
-app.get(
-  "/iptv/m3u",
-  async (req, res) => {
-    try {
-      if (
-        !IPTV_M3U_URL
-      ) {
-        return res
-          .status(500)
-          .type("text/plain")
-          .send(
-            "IPTV_M3U_URL nao configurada no Render"
-          );
-      }
-
-      const m3u =
-        await downloadIptvList();
-
-      res.set({
-        "Content-Type":
-          "application/vnd.apple.mpegurl; charset=utf-8",
-
-        "Cache-Control":
-          "no-store, no-cache, must-revalidate",
-
-        "Pragma":
-          "no-cache",
-
-        "Expires":
-          "0"
-      });
-
-      return res
-        .status(200)
-        .send(m3u);
-
-    } catch (error) {
-      console.error(
-        "IPTV ERRO:",
-        error.message
-      );
-
-      if (
-        error.name ===
-        "AbortError"
-      ) {
-        return res
-          .status(504)
-          .type("text/plain")
-          .send(
-            "Timeout ao conectar ao servidor IPTV"
-          );
-      }
-
-      return res
-        .status(502)
-        .type("text/plain")
-        .send(
-          "Erro IPTV: " +
-          error.message
-        );
-    }
-  }
-);
-
-// ============================================================
-// NAVEGADOR - ABRIR
-// ============================================================
-
-app.get(
-  "/v5/open",
-  async (req, res) => {
-    const id =
-      String(
-        req.query.session || ""
-      ).trim();
-
-    const url =
-      String(
-        req.query.url || ""
-      ).trim();
-
-    if (!validSession(id)) {
-      return res
-        .status(400)
-        .send(
-          "Sessao invalida"
-        );
-    }
-
-    if (!validUrl(url)) {
-      return res
-        .status(400)
-        .send(
-          "URL invalida"
-        );
-    }
-
-    try {
-      const session =
-        await createSession(id);
-
-      const ok =
-        await openUrl(
-          session.page,
-          url
-        );
-
-      if (!ok) {
-        await session.page.setContent(
-          "<html><body style='font-family:Arial;padding:80px'>" +
-          "<h1>Pagina indisponivel</h1>" +
-          "<p>O site nao respondeu ou bloqueou o navegador remoto.</p>" +
-          "</body></html>"
-        );
-      }
-
-      return shot(
-        session.page,
-        res
-      );
-    } catch (error) {
-      console.error(
-        "OPEN:",
-        error
-      );
-
-      return res
-        .status(500)
-        .send(
-          "Erro interno"
-        );
-    }
-  }
-);
-
-// ============================================================
-// NAVEGADOR - PESQUISA
-// ============================================================
-
-app.get(
-  "/v5/search",
-  async (req, res) => {
-    const id =
-      String(
-        req.query.session || ""
-      ).trim();
-
-    const query =
-      String(
-        req.query.q || ""
-      ).trim();
-
-    if (!validSession(id)) {
-      return res
-        .status(400)
-        .send(
-          "Sessao invalida"
-        );
-    }
-
-    if (!query) {
-      return res
-        .status(400)
-        .send(
-          "Pesquisa vazia"
-        );
-    }
-
-    try {
-      const session =
-        await createSession(id);
-
-      let items = [];
-
-      try {
-        items =
-          await searchRss(
-            query
-          );
-      } catch (error) {
-        console.log(
-          "SEARCH:",
-          error.message
-        );
-      }
-
-      await session.page.setContent(
-        resultsHtml(
-          "Pesquisa",
-          query,
-          items
-        ),
-        {
-          waitUntil:
-            "domcontentloaded"
-        }
-      );
-
-      await waitVisual(
-        session.page,
-        2200
-      );
-
-      return shot(
-        session.page,
-        res
-      );
-    } catch (error) {
-      console.error(
-        "SEARCH:",
-        error
-      );
-
-      return res
-        .status(500)
-        .send(
-          "Erro interno"
-        );
-    }
-  }
-);
-
-// ============================================================
-// YOUTUBE
-// ============================================================
-
-app.get(
-  "/v6/youtube-search",
-  async (req, res) => {
-    const id =
-      String(
-        req.query.session || ""
-      ).trim();
-
-    const query =
-      String(
-        req.query.q || ""
-      ).trim();
-
-    if (!validSession(id)) {
-      return res
-        .status(400)
-        .send(
-          "Sessao invalida"
-        );
-    }
-
-    if (!query) {
-      return res
-        .status(400)
-        .send(
-          "Pesquisa vazia"
-        );
-    }
-
-    try {
-      const session =
-        await createSession(id);
-
-      const items =
-        await youtubeSearch(
-          query
-        );
-
-      await session.page.setContent(
-        resultsHtml(
-          "YouTube",
-          query,
-          items
-        ),
-        {
-          waitUntil:
-            "domcontentloaded"
-        }
-      );
-
-      await waitVisual(
-        session.page,
-        4500
-      );
-
-      return shot(
-        session.page,
-        res
-      );
-    } catch (error) {
-      console.error(
-        "YT SEARCH:",
-        error
-      );
-
-      return res
-        .status(500)
-        .send(
-          "Erro interno"
-        );
-    }
-  }
-);
-
-// ============================================================
-// CLIQUE
-// ============================================================
-
-app.get(
-  "/v5/click",
-  async (req, res) => {
-    const session =
-      getSession(
-        String(
-          req.query.session || ""
-        ).trim()
-      );
-
-    if (!session) {
-      return res
-        .status(404)
-        .send(
-          "Sessao nao encontrada"
-        );
-    }
-
-    const x =
-      Number(
-        req.query.x
-      );
-
-    const y =
-      Number(
-        req.query.y
-      );
-
-    if (
-      !Number.isFinite(x) ||
-      !Number.isFinite(y)
-    ) {
-      return res
-        .
+          (thumbs.high && thumbs.high.url) ||
