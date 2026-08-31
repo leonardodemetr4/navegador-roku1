@@ -1287,7 +1287,11 @@ app.get("/api/device/:code", (req, res) => {
     epgConfigured:
       Boolean(cfg.epgUrl),
     updatedAt:
-      cfg.updatedAt || null
+      cfg.updatedAt || null,
+    sourceUrl:
+      cfg.m3uUrl || (cfg.server && cfg.username && cfg.password
+        ? buildXtreamM3u(cfg.server, cfg.username, cfg.password, "ts")
+        : "")
   });
 });
 
