@@ -695,8 +695,6 @@ const DEVICE_CONFIG_FILE =
   process.env.DEVICE_CONFIG_FILE ||
   path.join(process.cwd(), "device-configs.json");
 
-const IPTV_LOGIN_SERVER = process.env.IPTV_LOGIN_SERVER || "http://195.181.163.138:80";
-
 const deviceConfigs = new Map();
 const deviceM3uCache = new Map();
 const DEVICE_CACHE_MS = 5 * 60 * 1000;
@@ -838,9 +836,10 @@ function buildXtreamM3u(server, username, password) {
   return u.toString();
 }
 
-function setupPage(message = "", codeValue = "") {
+function setupPage(message = "", codeValue = "", serverValue = "") {
   const safeMessage = htmlEscape(message);
   const safeCode = htmlEscape(codeValue);
+  const safeServer = htmlEscape(serverValue);
 
   return `<!doctype html>
 <html lang="pt-BR">
@@ -875,7 +874,7 @@ button.save{width:100%;margin-top:24px;padding:15px;border:0;border-radius:11px;
 <body>
 <div class="wrap">
   <div class="brand">ELIN PLAY</div>
-  <div class="sub">Entre com sua conta IPTV</div>
+  <div class="sub">Configuração com servidor IPTV • v2</div>
 
   <div class="card">
     ${safeMessage ? `<div class="notice">${safeMessage}</div>` : ""}
@@ -883,6 +882,9 @@ button.save{width:100%;margin-top:24px;padding:15px;border:0;border-radius:11px;
     <form method="post" action="/setup/save" id="setupForm">
       <label>Codigo exibido na TV</label>
       <input name="code" maxlength="10" autocomplete="off" required value="${safeCode}" placeholder="Ex.: ABCD2345" style="text-transform:uppercase">
+
+      <label>Servidor IPTV</label>
+      <input name="server" required value="${safeServer}" placeholder="Ex.: http://servidor.com:80">
 
       <div class="grid">
         <div>
@@ -899,7 +901,7 @@ button.save{width:100%;margin-top:24px;padding:15px;border:0;border-radius:11px;
     </form>
 
     <div class="hint">
-      O servidor da sua lista ja fica configurado no ELIN PLAY. Voce precisa informar apenas o codigo da TV, usuario e senha.
+      Informe o codigo da TV, o servidor da sua conta IPTV, usuario e senha. O ELIN PLAY monta a lista automaticamente.
       Use somente uma conta que voce possui autorizacao para usar.
     </div>
 
@@ -925,6 +927,9 @@ code.addEventListener("input", () => {
 loadDeviceConfigs();
 
 app.get("/setup", (req, res) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
   const code =
     normalizeDeviceCode(req.query.code);
 
@@ -953,6 +958,7 @@ app.get("/setup", (req, res) => {
 });
 
 app.post("/setup/save", (req, res) => {
+  res.set("Cache-Control", "no-store");
   const code = normalizeDeviceCode(req.body.code);
 
   if (!validDeviceCode(code)) {
@@ -964,11 +970,22 @@ app.post("/setup/save", (req, res) => {
     );
   }
 
+  const server = normalizeHttpUrl(req.body.server);
   const username = String(req.body.username || "").trim();
   const password = String(req.body.password || "");
 
+  if (!server) {
+    return res.status(400).type("html").send(
+      setupPage(
+        "Servidor invalido. Use um endereco http:// ou https://.",
+        code,
+        String(req.body.server || "")
+      )
+    );
+  }
+
   const m3uUrl = buildXtreamM3u(
-    IPTV_LOGIN_SERVER,
+    server,
     username,
     password
   );
@@ -976,8 +993,9 @@ app.post("/setup/save", (req, res) => {
   if (!m3uUrl) {
     return res.status(400).type("html").send(
       setupPage(
-        "Confira o usuario e a senha.",
-        code
+        "Confira o servidor, usuario e senha.",
+        code,
+        server
       )
     );
   }
@@ -985,6 +1003,7 @@ app.post("/setup/save", (req, res) => {
   deviceConfigs.set(code, {
     name: "Minha IPTV",
     mode: "login",
+    server,
     m3uUrl,
     epgUrl: "",
     updatedAt: new Date().toISOString()
