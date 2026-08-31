@@ -695,6 +695,8 @@ const DEVICE_CONFIG_FILE =
   process.env.DEVICE_CONFIG_FILE ||
   path.join(process.cwd(), "device-configs.json");
 
+const IPTV_LOGIN_SERVER = process.env.IPTV_LOGIN_SERVER || "http://195.181.163.138:80";
+
 const deviceConfigs = new Map();
 const deviceM3uCache = new Map();
 const DEVICE_CACHE_MS = 5 * 60 * 1000;
@@ -845,272 +847,74 @@ function setupPage(message = "", codeValue = "") {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ELIN PLAY - Adicionar lista</title>
+<title>ELIN PLAY - Entrar</title>
 <style>
 *{box-sizing:border-box}
 body{
   margin:0;
   min-height:100vh;
   font-family:Arial,Helvetica,sans-serif;
-  background:
-    radial-gradient(circle at 15% 5%,#173a66 0,#08182c 35%,#040b16 100%);
+  background:radial-gradient(circle at 15% 5%,#173a66 0,#08182c 35%,#040b16 100%);
   color:#eef9ff;
 }
-.wrap{
-  width:min(920px,94%);
-  margin:0 auto;
-  padding:34px 0 60px;
-}
-.brand{
-  text-align:center;
-  font-size:34px;
-  font-weight:800;
-  letter-spacing:2px;
-  margin-bottom:8px;
-}
-.sub{
-  text-align:center;
-  color:#9bcfe8;
-  margin-bottom:28px;
-}
-.card{
-  background:rgba(7,24,43,.94);
-  border:1px solid #1f577c;
-  border-radius:16px;
-  padding:24px;
-  box-shadow:0 18px 60px rgba(0,0,0,.35);
-}
-.notice{
-  margin:0 0 18px;
-  padding:13px 15px;
-  border-radius:10px;
-  background:#0d3049;
-  border:1px solid #1db9de;
-  color:#d9f9ff;
-}
-.tabs{
-  display:flex;
-  gap:10px;
-  margin:18px 0;
-}
-.tab{
-  flex:1;
-  border:1px solid #235d7d;
-  background:#0b2338;
-  color:#c9f4ff;
-  padding:12px;
-  border-radius:10px;
-  font-weight:700;
-  cursor:pointer;
-}
-.tab.active{
-  background:#0a6e95;
-  border-color:#38d8ff;
-  color:white;
-}
-label{
-  display:block;
-  font-weight:700;
-  margin:16px 0 7px;
-}
-input{
-  width:100%;
-  border:1px solid #2c5973;
-  background:#071827;
-  color:white;
-  border-radius:10px;
-  padding:14px 13px;
-  font-size:16px;
-  outline:none;
-}
-input:focus{
-  border-color:#32d5ff;
-  box-shadow:0 0 0 2px rgba(50,213,255,.15);
-}
-.grid{
-  display:grid;
-  grid-template-columns:1fr 1fr;
-  gap:14px;
-}
-.hidden{display:none}
-button.save{
-  width:100%;
-  margin-top:24px;
-  padding:15px;
-  border:0;
-  border-radius:11px;
-  background:#0bb6df;
-  color:#03131e;
-  font-size:17px;
-  font-weight:800;
-  cursor:pointer;
-}
-.hint{
-  color:#9ab9c9;
-  line-height:1.5;
-  font-size:14px;
-  margin-top:18px;
-}
-.delete{
-  margin-top:16px;
-  text-align:center;
-}
-.delete button{
-  border:1px solid #80505c;
-  background:transparent;
-  color:#ffb3c3;
-  padding:10px 16px;
-  border-radius:9px;
-}
-@media(max-width:650px){
-  .grid{grid-template-columns:1fr}
-  .wrap{padding-top:18px}
-  .card{padding:18px}
-}
+.wrap{width:min(720px,94%);margin:0 auto;padding:34px 0 60px}
+.brand{text-align:center;font-size:34px;font-weight:800;letter-spacing:2px;margin-bottom:8px}
+.sub{text-align:center;color:#9bcfe8;margin-bottom:28px}
+.card{background:rgba(7,24,43,.94);border:1px solid #1f577c;border-radius:16px;padding:24px;box-shadow:0 18px 60px rgba(0,0,0,.35)}
+.notice{margin:0 0 18px;padding:13px 15px;border-radius:10px;background:#0d3049;border:1px solid #1db9de;color:#d9f9ff}
+label{display:block;font-weight:700;margin:16px 0 7px}
+input{width:100%;border:1px solid #2c5973;background:#071827;color:white;border-radius:10px;padding:14px 13px;font-size:16px;outline:none}
+input:focus{border-color:#32d5ff;box-shadow:0 0 0 2px rgba(50,213,255,.15)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+button.save{width:100%;margin-top:24px;padding:15px;border:0;border-radius:11px;background:#0bb6df;color:#03131e;font-size:17px;font-weight:800;cursor:pointer}
+.hint{color:#9ab9c9;line-height:1.5;font-size:14px;margin-top:18px}
+.delete{margin-top:16px;text-align:center}.delete button{border:1px solid #80505c;background:transparent;color:#ffb3c3;padding:10px 16px;border-radius:9px}
+@media(max-width:650px){.grid{grid-template-columns:1fr}.wrap{padding-top:18px}.card{padding:18px}}
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="brand">ELIN PLAY</div>
-  <div class="sub">Cadastre sua propria lista IPTV no Roku</div>
+  <div class="sub">Entre com sua conta IPTV</div>
 
   <div class="card">
     ${safeMessage ? `<div class="notice">${safeMessage}</div>` : ""}
 
     <form method="post" action="/setup/save" id="setupForm">
       <label>Codigo exibido na TV</label>
-      <input
-        name="code"
-        maxlength="10"
-        autocomplete="off"
-        required
-        value="${safeCode}"
-        placeholder="Ex.: ABCD2345"
-        style="text-transform:uppercase"
-      >
+      <input name="code" maxlength="10" autocomplete="off" required value="${safeCode}" placeholder="Ex.: ABCD2345" style="text-transform:uppercase">
 
-      <label>Nome da lista</label>
-      <input
-        name="name"
-        maxlength="80"
-        placeholder="Minha IPTV"
-      >
-
-      <div class="tabs">
-        <button class="tab active" type="button" data-mode="m3u">
-          URL M3U
-        </button>
-        <button class="tab" type="button" data-mode="xtream">
-          Conta Xtream
-        </button>
-      </div>
-
-      <input type="hidden" name="mode" id="mode" value="m3u">
-
-      <div id="m3uFields">
-        <label>URL da lista M3U</label>
-        <input
-          name="m3uUrl"
-          placeholder="http://servidor/get.php?..."
-        >
-      </div>
-
-      <div id="xtreamFields" class="hidden">
-        <label>Servidor Xtream</label>
-        <input
-          name="xtreamServer"
-          placeholder="http://servidor:porta"
-        >
-
-        <div class="grid">
-          <div>
-            <label>Usuario</label>
-            <input
-              name="username"
-              autocomplete="username"
-            >
-          </div>
-
-          <div>
-            <label>Senha</label>
-            <input
-              name="password"
-              type="password"
-              autocomplete="current-password"
-            >
-          </div>
+      <div class="grid">
+        <div>
+          <label>Usuario</label>
+          <input name="username" autocomplete="username" required placeholder="Seu usuario">
+        </div>
+        <div>
+          <label>Senha</label>
+          <input name="password" type="password" autocomplete="current-password" required placeholder="Sua senha">
         </div>
       </div>
 
-      <label>URL EPG (opcional)</label>
-      <input
-        name="epgUrl"
-        placeholder="https://.../epg.xml"
-      >
-
-      <button class="save" type="submit">
-        Salvar e enviar para a TV
-      </button>
+      <button class="save" type="submit">Entrar e enviar para a TV</button>
     </form>
 
     <div class="hint">
-      Use somente listas e contas que voce possui autorizacao para usar.
-      O Roku consulta este servidor pelo codigo mostrado na tela e carrega
-      a lista automaticamente.
+      O servidor da sua lista ja fica configurado no ELIN PLAY. Voce precisa informar apenas o codigo da TV, usuario e senha.
+      Use somente uma conta que voce possui autorizacao para usar.
     </div>
 
     <form class="delete" method="post" action="/setup/delete">
-      <input
-        type="hidden"
-        name="code"
-        id="deleteCode"
-        value="${safeCode}"
-      >
-      <button type="submit">
-        Apagar configuracao deste codigo
-      </button>
+      <input type="hidden" name="code" id="deleteCode" value="${safeCode}">
+      <button type="submit">Apagar configuracao deste codigo</button>
     </form>
   </div>
 </div>
 
 <script>
-const tabs = document.querySelectorAll(".tab");
-const mode = document.getElementById("mode");
-const m3u = document.getElementById("m3uFields");
-const xtream = document.getElementById("xtreamFields");
 const code = document.querySelector('input[name="code"]');
 const deleteCode = document.getElementById("deleteCode");
-
-function setMode(value) {
-  mode.value = value;
-
-  tabs.forEach(btn => {
-    btn.classList.toggle(
-      "active",
-      btn.dataset.mode === value
-    );
-  });
-
-  m3u.classList.toggle(
-    "hidden",
-    value !== "m3u"
-  );
-
-  xtream.classList.toggle(
-    "hidden",
-    value !== "xtream"
-  );
-}
-
-tabs.forEach(btn => {
-  btn.addEventListener("click", () => {
-    setMode(btn.dataset.mode);
-  });
-});
-
 code.addEventListener("input", () => {
-  code.value =
-    code.value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  code.value = code.value.toUpperCase().replace(/[^A-Z0-9]/g, "");
   deleteCode.value = code.value;
 });
 </script>
@@ -1149,80 +953,48 @@ app.get("/setup", (req, res) => {
 });
 
 app.post("/setup/save", (req, res) => {
-  const code =
-    normalizeDeviceCode(req.body.code);
+  const code = normalizeDeviceCode(req.body.code);
 
   if (!validDeviceCode(code)) {
-    return res
-      .status(400)
-      .type("html")
-      .send(
-        setupPage(
-          "Codigo invalido. Digite exatamente o codigo mostrado na TV.",
-          code
-        )
-      );
+    return res.status(400).type("html").send(
+      setupPage(
+        "Codigo invalido. Digite exatamente o codigo mostrado na TV.",
+        code
+      )
+    );
   }
 
-  const mode =
-    String(req.body.mode || "m3u")
-      .trim()
-      .toLowerCase();
+  const username = String(req.body.username || "").trim();
+  const password = String(req.body.password || "");
 
-  const name =
-    String(req.body.name || "Minha IPTV")
-      .trim()
-      .slice(0, 80) ||
-    "Minha IPTV";
-
-  let m3uUrl = "";
-
-  if (mode === "xtream") {
-    m3uUrl =
-      buildXtreamM3u(
-        req.body.xtreamServer,
-        String(req.body.username || "").trim(),
-        String(req.body.password || "")
-      );
-  } else {
-    m3uUrl =
-      normalizeHttpUrl(req.body.m3uUrl);
-  }
+  const m3uUrl = buildXtreamM3u(
+    IPTV_LOGIN_SERVER,
+    username,
+    password
+  );
 
   if (!m3uUrl) {
-    return res
-      .status(400)
-      .type("html")
-      .send(
-        setupPage(
-          "Confira os dados da lista. A URL ou a conta Xtream nao e valida.",
-          code
-        )
-      );
+    return res.status(400).type("html").send(
+      setupPage(
+        "Confira o usuario e a senha.",
+        code
+      )
+    );
   }
 
-  const epgUrl =
-    normalizeHttpUrl(req.body.epgUrl);
-
   deviceConfigs.set(code, {
-    name,
-    mode:
-      mode === "xtream"
-        ? "xtream"
-        : "m3u",
+    name: "Minha IPTV",
+    mode: "login",
     m3uUrl,
-    epgUrl,
-    updatedAt:
-      new Date().toISOString()
+    epgUrl: "",
+    updatedAt: new Date().toISOString()
   });
 
   deviceM3uCache.delete(code);
   saveDeviceConfigs();
 
   return res.redirect(
-    "/setup?code=" +
-    encodeURIComponent(code) +
-    "&saved=1"
+    "/setup?code=" + encodeURIComponent(code) + "&saved=1"
   );
 });
 
