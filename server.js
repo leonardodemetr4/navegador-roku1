@@ -1032,17 +1032,17 @@ async function buildXtreamM3uFromApi(cfg) {
   return lines.join("\n") + "\n";
 }
 
-function setupPage(message = "", codeValue = "", serverValue = "") {
+function setupPage(message = "", codeValue = "", m3uValue = "") {
   const safeMessage = htmlEscape(message);
   const safeCode = htmlEscape(codeValue);
-  const safeServer = htmlEscape(serverValue);
+  const safeM3u = htmlEscape(m3uValue);
 
   return `<!doctype html>
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ELIN PLAY - Entrar</title>
+<title>ELIN PLAY - M3U Direta</title>
 <style>
 *{box-sizing:border-box}
 body{
@@ -1060,45 +1060,50 @@ body{
 label{display:block;font-weight:700;margin:16px 0 7px}
 input{width:100%;border:1px solid #2c5973;background:#071827;color:white;border-radius:10px;padding:14px 13px;font-size:16px;outline:none}
 input:focus{border-color:#32d5ff;box-shadow:0 0 0 2px rgba(50,213,255,.15)}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 button.save{width:100%;margin-top:24px;padding:15px;border:0;border-radius:11px;background:#0bb6df;color:#03131e;font-size:17px;font-weight:800;cursor:pointer}
 .hint{color:#9ab9c9;line-height:1.5;font-size:14px;margin-top:18px}
-.delete{margin-top:16px;text-align:center}.delete button{border:1px solid #80505c;background:transparent;color:#ffb3c3;padding:10px 16px;border-radius:9px}
-@media(max-width:650px){.grid{grid-template-columns:1fr}.wrap{padding-top:18px}.card{padding:18px}}
+.delete{margin-top:16px;text-align:center}
+.delete button{border:1px solid #80505c;background:transparent;color:#ffb3c3;padding:10px 16px;border-radius:9px}
+@media(max-width:650px){.wrap{padding-top:18px}.card{padding:18px}}
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="brand">ELIN PLAY</div>
-  <div class="sub">Configuração com servidor IPTV • v4 Xtream</div>
+  <div class="sub">M3U Direta • v9.3</div>
 
   <div class="card">
     ${safeMessage ? `<div class="notice">${safeMessage}</div>` : ""}
 
     <form method="POST" action="/setup/save" enctype="application/x-www-form-urlencoded" id="setupForm">
       <label>Codigo exibido na TV</label>
-      <input name="code" maxlength="10" autocomplete="off" required value="${safeCode}" placeholder="Ex.: ABCD2345" style="text-transform:uppercase">
+      <input
+        name="code"
+        maxlength="10"
+        autocomplete="off"
+        required
+        value="${safeCode}"
+        placeholder="Ex.: ABCD2345"
+        style="text-transform:uppercase"
+      >
 
-      <label>Servidor IPTV</label>
-      <input name="server" required value="${safeServer}" placeholder="Ex.: http://servidor.com:80">
+      <label>URL M3U completa</label>
+      <input
+        name="m3u"
+        type="url"
+        autocomplete="off"
+        required
+        value="${safeM3u}"
+        placeholder="http://servidor/get.php?username=...&password=..."
+      >
 
-      <div class="grid">
-        <div>
-          <label>Usuario</label>
-          <input name="username" autocomplete="username" required placeholder="Seu usuario">
-        </div>
-        <div>
-          <label>Senha</label>
-          <input name="password" type="password" autocomplete="current-password" required placeholder="Sua senha">
-        </div>
-      </div>
-
-      <button class="save" type="submit">Entrar e enviar para a TV</button>
+      <button class="save" type="submit">Salvar e enviar para a TV</button>
     </form>
 
     <div class="hint">
-      Informe o codigo da TV, o servidor da sua conta IPTV, usuario e senha. O ELIN PLAY monta a lista automaticamente.
-      Use somente uma conta que voce possui autorizacao para usar.
+      Cole a URL M3U completa exatamente como ela funciona no seu outro aplicativo.
+      O ELIN PLAY nao monta player_api.php e nao altera servidor, usuario, senha ou protocolo.
+      Use somente uma lista que voce possui autorizacao para usar.
     </div>
 
     <form class="delete" method="post" action="/setup/delete">
@@ -1133,32 +1138,26 @@ app.get("/setup", (req, res) => {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.set("Pragma", "no-cache");
   res.set("Expires", "0");
-  const code =
-    normalizeDeviceCode(req.query.code);
 
-  const saved =
-    String(req.query.saved || "") === "1";
-
-  const deleted =
-    String(req.query.deleted || "") === "1";
-
-  const methodError =
-    String(req.query.method || "") === "1";
+  const code = normalizeDeviceCode(req.query.code);
+  const saved = String(req.query.saved || "") === "1";
+  const deleted = String(req.query.deleted || "") === "1";
+  const methodError = String(req.query.method || "") === "1";
 
   let message = "";
 
   if (saved) {
     message =
-      "Lista salva. Volte para a TV; o app vai detectar a configuracao.";
+      "M3U salva. Volte para a TV; o app vai detectar e carregar a lista.";
   } else if (deleted) {
     message =
       "Configuracao apagada.";
   } else if (methodError) {
     message =
-      "Use o botao Entrar e enviar para a TV para salvar a configuracao.";
+      "Use o botao Salvar e enviar para a TV para cadastrar a M3U.";
   }
 
-  res
+  return res
     .status(200)
     .type("html")
     .send(
@@ -1178,53 +1177,34 @@ app.post("/setup/save/", (req, res, next) => {
 
 app.post("/setup/save", (req, res) => {
   res.set("Cache-Control", "no-store");
+
   const code = normalizeDeviceCode(req.body.code);
 
   if (!validDeviceCode(code)) {
     return res.status(400).type("html").send(
       setupPage(
         "Codigo invalido. Digite exatamente o codigo mostrado na TV.",
-        code
-      )
-    );
-  }
-
-  const server = normalizeHttpUrl(req.body.server);
-  const username = String(req.body.username || "").trim();
-  const password = String(req.body.password || "");
-
-  if (!server) {
-    return res.status(400).type("html").send(
-      setupPage(
-        "Servidor invalido. Use um endereco http:// ou https://.",
         code,
-        String(req.body.server || "")
+        String(req.body.m3u || "")
       )
     );
   }
 
-  const m3uUrl = buildXtreamM3u(
-    server,
-    username,
-    password
-  );
+  const m3uUrl = normalizeHttpUrl(req.body.m3u);
 
   if (!m3uUrl) {
     return res.status(400).type("html").send(
       setupPage(
-        "Confira o servidor, usuario e senha.",
+        "URL M3U invalida. Cole o endereco completo iniciando por http:// ou https://.",
         code,
-        server
+        String(req.body.m3u || "")
       )
     );
   }
 
   deviceConfigs.set(code, {
     name: "Minha IPTV",
-    mode: "xtream",
-    server,
-    username,
-    password,
+    mode: "m3u",
     m3uUrl,
     epgUrl: "",
     updatedAt: new Date().toISOString()
@@ -1288,10 +1268,7 @@ app.get("/api/device/:code", (req, res) => {
       Boolean(cfg.epgUrl),
     updatedAt:
       cfg.updatedAt || null,
-    sourceUrl:
-      cfg.m3uUrl || (cfg.server && cfg.username && cfg.password
-        ? buildXtreamM3u(cfg.server, cfg.username, cfg.password, "ts")
-        : "")
+    sourceUrl: cfg.m3uUrl || ""
   });
 });
 
@@ -1302,69 +1279,38 @@ async function downloadDeviceM3u(code) {
     throw new Error("Nenhuma lista cadastrada para este dispositivo");
   }
 
+  if (!cfg.m3uUrl) {
+    throw new Error("Este dispositivo nao possui uma URL M3U cadastrada");
+  }
+
   const cached = deviceM3uCache.get(code);
-  if (cached && Date.now() - cached.time < DEVICE_CACHE_MS) {
+
+  if (
+    cached &&
+    Date.now() - cached.time < DEVICE_CACHE_MS
+  ) {
     return cached.text;
   }
 
   const errors = [];
   let rawText = "";
 
-  // 1) Tenta a URL M3U padrão salva.
-  if (cfg.m3uUrl) {
+  try {
+    rawText = await fetchIptvCandidate(
+      cfg.m3uUrl,
+      "Dispositivo " + code
+    );
+  } catch (error) {
+    errors.push(error.message);
+  }
+
+  if (!rawText) {
     try {
       rawText = await fetchIptvCandidate(
         cfg.m3uUrl,
-        "Dispositivo " + code
+        "Dispositivo " + code + " VLC",
+        "VLC/3.0.20 LibVLC/3.0.20"
       );
-    } catch (error) {
-      errors.push(error.message);
-    }
-
-    if (!rawText) {
-      try {
-        rawText = await fetchIptvCandidate(
-          cfg.m3uUrl,
-          "Dispositivo " + code + " VLC",
-          "VLC/3.0.20 LibVLC/3.0.20"
-        );
-      } catch (error) {
-        errors.push(error.message);
-      }
-    }
-  }
-
-  // 2) Se o login foi salvo, valida a conta pela API Xtream.
-  if (!rawText && cfg.server && cfg.username && cfg.password) {
-    try {
-      await validateXtreamConfig(cfg);
-
-      // Alguns painéis respondem melhor com output=ts.
-      for (const output of ["ts", "m3u8"]) {
-        try {
-          const url = buildXtreamGetUrl(
-            cfg.server,
-            cfg.username,
-            cfg.password,
-            output
-          );
-
-          rawText = await fetchIptvCandidate(
-            url,
-            "Xtream get.php " + output,
-            "VLC/3.0.20 LibVLC/3.0.20"
-          );
-
-          if (rawText) break;
-        } catch (error) {
-          errors.push(error.message);
-        }
-      }
-
-      // 3) Se get.php não entrega M3U, monta uma M3U usando player_api.php.
-      if (!rawText) {
-        rawText = await buildXtreamM3uFromApi(cfg);
-      }
     } catch (error) {
       errors.push(error.message);
     }
@@ -1373,13 +1319,16 @@ async function downloadDeviceM3u(code) {
   if (!rawText) {
     throw new Error(
       errors.filter(Boolean).join(" | ") ||
-      "Nao foi possivel obter a lista IPTV"
+      "Nao foi possivel obter a lista M3U"
     );
   }
 
   const cleaned = cleanM3u(rawText);
+
   if (!cleaned) {
-    throw new Error("A lista nao possui itens M3U validos");
+    throw new Error(
+      "A URL respondeu, mas nao retornou itens M3U validos"
+    );
   }
 
   deviceM3uCache.set(code, {
@@ -1391,61 +1340,19 @@ async function downloadDeviceM3u(code) {
 }
 
 
-app.get("/iptv/device/:code/xtream-status", async (req, res) => {
+app.get("/iptv/device/:code/xtream-status", (req, res) => {
   const code = normalizeDeviceCode(req.params.code);
-
-  if (!validDeviceCode(code)) {
-    return res.status(400).json({
-      ok: false,
-      error: "Codigo invalido"
-    });
-  }
-
   const cfg = deviceConfigs.get(code);
 
-  if (!cfg) {
-    return res.status(404).json({
-      ok: false,
-      configured: false,
-      error: "Nenhuma lista cadastrada para este dispositivo"
-    });
-  }
-
-  if (!cfg.server || !cfg.username || !cfg.password) {
-    return res.status(400).json({
-      ok: false,
-      configured: true,
-      xtream: false,
-      error: "Configuracao antiga sem dados Xtream. Salve a conta novamente no /setup."
-    });
-  }
-
-  try {
-    const info = await validateXtreamConfig(cfg);
-
-    return res.json({
-      ok: true,
-      configured: true,
-      xtream: true,
-      authenticated: true,
-      status: info.status,
-      expDate: info.expDate,
-      maxConnections: info.maxConnections,
-      activeConnections: info.activeConnections,
-      serverTimeZone:
-        info.serverInfo && info.serverInfo.timezone
-          ? info.serverInfo.timezone
-          : null
-    });
-  } catch (error) {
-    return res.status(502).json({
-      ok: false,
-      configured: true,
-      xtream: true,
-      authenticated: false,
-      error: error.message
-    });
-  }
+  return res.json({
+    ok: Boolean(cfg && cfg.m3uUrl),
+    configured: Boolean(cfg),
+    mode: "m3u-direct",
+    message:
+      cfg && cfg.m3uUrl
+        ? "Este dispositivo usa M3U direta. Xtream/player_api nao e necessario."
+        : "Nenhuma M3U cadastrada para este dispositivo."
+  });
 });
 
 app.get("/iptv/device/:code/m3u", async (req, res) => {
@@ -1769,7 +1676,7 @@ setInterval(async () => {
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(
-    "Navegador Roku V6.3 + IPTV iniciado na porta " +
+    "Navegador Roku V6.3 + IPTV + M3U Direta v9.3 iniciado na porta " +
     PORT
   );
 
