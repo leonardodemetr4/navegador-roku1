@@ -874,12 +874,12 @@ button.save{width:100%;margin-top:24px;padding:15px;border:0;border-radius:11px;
 <body>
 <div class="wrap">
   <div class="brand">ELIN PLAY</div>
-  <div class="sub">Configuração com servidor IPTV • v2</div>
+  <div class="sub">Configuração com servidor IPTV • v3</div>
 
   <div class="card">
     ${safeMessage ? `<div class="notice">${safeMessage}</div>` : ""}
 
-    <form method="post" action="/setup/save" id="setupForm">
+    <form method="POST" action="/setup/save" enctype="application/x-www-form-urlencoded" id="setupForm">
       <label>Codigo exibido na TV</label>
       <input name="code" maxlength="10" autocomplete="off" required value="${safeCode}" placeholder="Ex.: ABCD2345" style="text-transform:uppercase">
 
@@ -919,6 +919,13 @@ code.addEventListener("input", () => {
   code.value = code.value.toUpperCase().replace(/[^A-Z0-9]/g, "");
   deleteCode.value = code.value;
 });
+
+const setupForm = document.getElementById("setupForm");
+const saveButton = setupForm.querySelector('button[type="submit"]');
+setupForm.addEventListener("submit", () => {
+  saveButton.disabled = true;
+  saveButton.textContent = "Salvando...";
+});
 </script>
 </body>
 </html>`;
@@ -939,6 +946,9 @@ app.get("/setup", (req, res) => {
   const deleted =
     String(req.query.deleted || "") === "1";
 
+  const methodError =
+    String(req.query.method || "") === "1";
+
   let message = "";
 
   if (saved) {
@@ -947,6 +957,9 @@ app.get("/setup", (req, res) => {
   } else if (deleted) {
     message =
       "Configuracao apagada.";
+  } else if (methodError) {
+    message =
+      "Use o botao Entrar e enviar para a TV para salvar a configuracao.";
   }
 
   res
@@ -955,6 +968,16 @@ app.get("/setup", (req, res) => {
     .send(
       setupPage(message, code)
     );
+});
+
+app.get("/setup/save", (req, res) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  return res.redirect(303, "/setup?method=1");
+});
+
+app.post("/setup/save/", (req, res, next) => {
+  req.url = "/setup/save";
+  next();
 });
 
 app.post("/setup/save", (req, res) => {
