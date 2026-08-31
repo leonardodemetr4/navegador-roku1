@@ -1,7 +1,13 @@
 const express = require("express");
 const { chromium } = require("playwright");
+const http = require("http");
+const https = require("https");
+const fs = require("fs");
+const path = require("path");
 
 const app = express();
+app.use(express.urlencoded({ extended: false, limit: "32kb" }));
+app.use(express.json({ limit: "32kb" }));
 const PORT = process.env.PORT || 10000;
 
 const IPTV_M3U_URL = process.env.IPTV_M3U_URL || "";
@@ -373,69 +379,234 @@ function cleanM3u(text) {
   return output.join("\n") + "\n";
 }
 
-async function downloadIptv() {
-  if (!IPTV_M3U_URL) {
-    throw new Error("IPTV_M3U_URL nao configurada");
-  }
+function requestText(rawUrl, timeoutMs = 25000, redirects = 0) {
+  return new Promise((resolve, reject) => {
+    if (redirects > 5) {
+      reject(new Error("Muitos redirecionamentos"));
+      return;
+    }
 
-  if (iptvCache && Date.now() - iptvCacheTime < IPTV_CACHE_MS) {
-    console.log("IPTV usando cache");
-    return iptvCache;
-  }
+    let parsed;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 25000);
+    try {
+      parsed = new URL(rawUrl);
+    } catch {
+      reject(new Error("URL IPTV invalida"));
+      return;
+    }
 
-  try {
-    console.log("IPTV buscando lista...");
+    const client = parsed.protocol === "https:" ? https : http;
 
-    const response = await fetch(IPTV_M3U_URL, {
+    const options = {
+      protocol: parsed.protocol,
+      hostname: parsed.hostname,
+      port: parsed.port || undefined,
+      path: parsed.pathname + parsed.search,
       method: "GET",
-      redirect: "follow",
-      signal: controller.signal,
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 " +
           "Chrome/131.0.0.0 Safari/537.36",
         "Accept":
           "application/x-mpegURL,application/vnd.apple.mpegurl,text/plain,*/*",
-        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8"
+        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+        "Connection": "close"
+      },
+      rejectUnauthorized: false
+    };
+
+    const req = client.request(options, res => {
+      const status = res.statusCode || 0;
+
+      if (
+        status >= 300 &&
+        status < 400 &&
+        res.headers.location
+      ) {
+        const nextUrl =
+          new URL(res.headers.location, rawUrl).toString();
+
+        res.resume();
+
+        requestText(
+          nextUrl,
+          timeoutMs,
+          redirects + 1
+        )
+          .then(resolve)
+          .catch(reject);
+
+        return;
       }
+
+      const chunks = [];
+
+      res.on("data", chunk => {
+        chunks.push(chunk);
+      });
+
+      res.on("end", () => {
+        const body =
+          Buffer.concat(chunks).toString("utf8");
+
+        resolve({
+          status,
+          body,
+          contentType:
+            String(
+              res.headers["content-type"] || ""
+            )
+        });
+      });
     });
 
-    console.log("IPTV HTTP:", response.status);
-
-    if (!response.ok) {
-      throw new Error(
-        "Servidor IPTV respondeu HTTP " + response.status
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(
+        new Error("Timeout ao conectar ao servidor IPTV")
       );
-    }
+    });
 
-    const text = await response.text();
+    req.on("error", reject);
+    req.end();
+  });
+}
 
-    console.log("IPTV resposta recebida:", text.length, "bytes");
+function httpsVariant(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
 
     if (
-      !text ||
-      (!text.includes("#EXTM3U") &&
-        !text.includes("#EXTINF"))
+      u.protocol === "http:" &&
+      u.port === "443"
     ) {
-      throw new Error("Resposta recebida nao parece M3U");
+      u.protocol = "https:";
+      return u.toString();
     }
+  } catch {}
 
-    const cleaned = cleanM3u(text);
+  return "";
+}
 
-    if (!cleaned) {
-      throw new Error("Nenhum item valido encontrado na lista");
-    }
+async function fetchIptvCandidate(url, label) {
+  console.log("IPTV tentativa:", label);
 
-    iptvCache = cleaned;
-    iptvCacheTime = Date.now();
+  const result =
+    await requestText(url, 25000);
 
-    return cleaned;
-  } finally {
-    clearTimeout(timer);
+  console.log(
+    "IPTV",
+    label,
+    "HTTP",
+    result.status,
+    "bytes",
+    result.body.length
+  );
+
+  if (
+    result.status < 200 ||
+    result.status >= 300
+  ) {
+    throw new Error(
+      label +
+      " respondeu HTTP " +
+      result.status
+    );
   }
+
+  if (
+    !result.body ||
+    (
+      !result.body.includes("#EXTM3U") &&
+      !result.body.includes("#EXTINF")
+    )
+  ) {
+    throw new Error(
+      label +
+      " nao retornou uma lista M3U"
+    );
+  }
+
+  return result.body;
+}
+
+async function downloadIptv() {
+  if (!IPTV_M3U_URL) {
+    throw new Error(
+      "IPTV_M3U_URL nao configurada"
+    );
+  }
+
+  if (
+    iptvCache &&
+    Date.now() - iptvCacheTime < IPTV_CACHE_MS
+  ) {
+    console.log("IPTV usando cache");
+    return iptvCache;
+  }
+
+  let rawText = "";
+  let firstError = "";
+
+  try {
+    rawText =
+      await fetchIptvCandidate(
+        IPTV_M3U_URL,
+        "URL original"
+      );
+  } catch (error) {
+    firstError = error.message;
+    console.log(
+      "IPTV URL original falhou:",
+      firstError
+    );
+  }
+
+  if (!rawText) {
+    const alt =
+      httpsVariant(IPTV_M3U_URL);
+
+    if (alt) {
+      try {
+        rawText =
+          await fetchIptvCandidate(
+            alt,
+            "HTTPS alternativo"
+          );
+      } catch (error) {
+        console.log(
+          "IPTV HTTPS alternativo falhou:",
+          error.message
+        );
+
+        throw new Error(
+          firstError +
+          " | " +
+          error.message
+        );
+      }
+    }
+  }
+
+  if (!rawText) {
+    throw new Error(
+      firstError ||
+      "Nao foi possivel obter a lista IPTV"
+    );
+  }
+
+  const cleaned =
+    cleanM3u(rawText);
+
+  if (!cleaned) {
+    throw new Error(
+      "Nenhum item valido encontrado na lista"
+    );
+  }
+
+  iptvCache = cleaned;
+  iptvCacheTime = Date.now();
+
+  return cleaned;
 }
 
 app.get("/", (req, res) => {
@@ -453,6 +624,37 @@ app.get("/health", (req, res) => {
     iptvConfigured: Boolean(IPTV_M3U_URL),
     sessions: sessions.size
   });
+});
+
+app.get("/iptv/status", async (req, res) => {
+  const result = {
+    ok: false,
+    configured: Boolean(IPTV_M3U_URL),
+    cached: Boolean(iptvCache),
+    cacheAgeSeconds:
+      iptvCacheTime > 0
+        ? Math.round((Date.now() - iptvCacheTime) / 1000)
+        : null
+  };
+
+  if (!IPTV_M3U_URL) {
+    result.error = "IPTV_M3U_URL nao configurada";
+    return res.status(500).json(result);
+  }
+
+  try {
+    const m3u = await downloadIptv();
+    const itemCount =
+      (m3u.match(/#EXTINF/g) || []).length;
+
+    result.ok = true;
+    result.items = itemCount;
+
+    return res.json(result);
+  } catch (error) {
+    result.error = error.message;
+    return res.status(502).json(result);
+  }
 });
 
 app.get("/iptv/m3u", async (req, res) => {
@@ -483,6 +685,721 @@ app.get("/iptv/m3u", async (req, res) => {
       .status(502)
       .type("text/plain")
       .send("Erro IPTV: " + error.message);
+  }
+});
+
+
+// -----------------------------------------------------------------------------
+// IPTV - cadastro pelo celular / pareamento com Roku
+// -----------------------------------------------------------------------------
+
+const DEVICE_CONFIG_FILE =
+  process.env.DEVICE_CONFIG_FILE ||
+  path.join(process.cwd(), "device-configs.json");
+
+const deviceConfigs = new Map();
+const deviceM3uCache = new Map();
+const DEVICE_CACHE_MS = 5 * 60 * 1000;
+
+function loadDeviceConfigs() {
+  try {
+    if (!fs.existsSync(DEVICE_CONFIG_FILE)) return;
+
+    const raw = fs.readFileSync(
+      DEVICE_CONFIG_FILE,
+      "utf8"
+    );
+
+    const parsed = JSON.parse(raw);
+
+    if (!parsed || typeof parsed !== "object") {
+      return;
+    }
+
+    for (const code of Object.keys(parsed)) {
+      if (
+        parsed[code] &&
+        typeof parsed[code] === "object"
+      ) {
+        deviceConfigs.set(code, parsed[code]);
+      }
+    }
+
+    console.log(
+      "IPTV dispositivos carregados:",
+      deviceConfigs.size
+    );
+  } catch (error) {
+    console.error(
+      "Falha ao carregar device-configs.json:",
+      error.message
+    );
+  }
+}
+
+function saveDeviceConfigs() {
+  try {
+    const obj = {};
+
+    for (const [code, cfg] of deviceConfigs) {
+      obj[code] = cfg;
+    }
+
+    fs.writeFileSync(
+      DEVICE_CONFIG_FILE,
+      JSON.stringify(obj, null, 2),
+      "utf8"
+    );
+  } catch (error) {
+    console.error(
+      "Falha ao salvar device-configs.json:",
+      error.message
+    );
+  }
+}
+
+function normalizeDeviceCode(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 10);
+}
+
+function validDeviceCode(code) {
+  return /^[A-Z0-9]{6,10}$/.test(code);
+}
+
+function normalizeHttpUrl(value) {
+  const raw = String(value || "").trim();
+
+  if (!raw) return "";
+
+  try {
+    const u = new URL(raw);
+
+    if (
+      u.protocol !== "http:" &&
+      u.protocol !== "https:"
+    ) {
+      return "";
+    }
+
+    return u.toString();
+  } catch {
+    return "";
+  }
+}
+
+function htmlEscape(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function buildXtreamM3u(server, username, password) {
+  const base = normalizeHttpUrl(server);
+
+  if (!base || !username || !password) {
+    return "";
+  }
+
+  const u = new URL(base);
+
+  u.pathname =
+    u.pathname.replace(/\/+$/, "") +
+    "/get.php";
+
+  u.search = "";
+
+  u.searchParams.set(
+    "username",
+    String(username)
+  );
+
+  u.searchParams.set(
+    "password",
+    String(password)
+  );
+
+  u.searchParams.set(
+    "type",
+    "m3u_plus"
+  );
+
+  u.searchParams.set(
+    "output",
+    "ts"
+  );
+
+  return u.toString();
+}
+
+function setupPage(message = "", codeValue = "") {
+  const safeMessage = htmlEscape(message);
+  const safeCode = htmlEscape(codeValue);
+
+  return `<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ELIN PLAY - Adicionar lista</title>
+<style>
+*{box-sizing:border-box}
+body{
+  margin:0;
+  min-height:100vh;
+  font-family:Arial,Helvetica,sans-serif;
+  background:
+    radial-gradient(circle at 15% 5%,#173a66 0,#08182c 35%,#040b16 100%);
+  color:#eef9ff;
+}
+.wrap{
+  width:min(920px,94%);
+  margin:0 auto;
+  padding:34px 0 60px;
+}
+.brand{
+  text-align:center;
+  font-size:34px;
+  font-weight:800;
+  letter-spacing:2px;
+  margin-bottom:8px;
+}
+.sub{
+  text-align:center;
+  color:#9bcfe8;
+  margin-bottom:28px;
+}
+.card{
+  background:rgba(7,24,43,.94);
+  border:1px solid #1f577c;
+  border-radius:16px;
+  padding:24px;
+  box-shadow:0 18px 60px rgba(0,0,0,.35);
+}
+.notice{
+  margin:0 0 18px;
+  padding:13px 15px;
+  border-radius:10px;
+  background:#0d3049;
+  border:1px solid #1db9de;
+  color:#d9f9ff;
+}
+.tabs{
+  display:flex;
+  gap:10px;
+  margin:18px 0;
+}
+.tab{
+  flex:1;
+  border:1px solid #235d7d;
+  background:#0b2338;
+  color:#c9f4ff;
+  padding:12px;
+  border-radius:10px;
+  font-weight:700;
+  cursor:pointer;
+}
+.tab.active{
+  background:#0a6e95;
+  border-color:#38d8ff;
+  color:white;
+}
+label{
+  display:block;
+  font-weight:700;
+  margin:16px 0 7px;
+}
+input{
+  width:100%;
+  border:1px solid #2c5973;
+  background:#071827;
+  color:white;
+  border-radius:10px;
+  padding:14px 13px;
+  font-size:16px;
+  outline:none;
+}
+input:focus{
+  border-color:#32d5ff;
+  box-shadow:0 0 0 2px rgba(50,213,255,.15);
+}
+.grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:14px;
+}
+.hidden{display:none}
+button.save{
+  width:100%;
+  margin-top:24px;
+  padding:15px;
+  border:0;
+  border-radius:11px;
+  background:#0bb6df;
+  color:#03131e;
+  font-size:17px;
+  font-weight:800;
+  cursor:pointer;
+}
+.hint{
+  color:#9ab9c9;
+  line-height:1.5;
+  font-size:14px;
+  margin-top:18px;
+}
+.delete{
+  margin-top:16px;
+  text-align:center;
+}
+.delete button{
+  border:1px solid #80505c;
+  background:transparent;
+  color:#ffb3c3;
+  padding:10px 16px;
+  border-radius:9px;
+}
+@media(max-width:650px){
+  .grid{grid-template-columns:1fr}
+  .wrap{padding-top:18px}
+  .card{padding:18px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">ELIN PLAY</div>
+  <div class="sub">Cadastre sua propria lista IPTV no Roku</div>
+
+  <div class="card">
+    ${safeMessage ? `<div class="notice">${safeMessage}</div>` : ""}
+
+    <form method="post" action="/setup/save" id="setupForm">
+      <label>Codigo exibido na TV</label>
+      <input
+        name="code"
+        maxlength="10"
+        autocomplete="off"
+        required
+        value="${safeCode}"
+        placeholder="Ex.: ABCD2345"
+        style="text-transform:uppercase"
+      >
+
+      <label>Nome da lista</label>
+      <input
+        name="name"
+        maxlength="80"
+        placeholder="Minha IPTV"
+      >
+
+      <div class="tabs">
+        <button class="tab active" type="button" data-mode="m3u">
+          URL M3U
+        </button>
+        <button class="tab" type="button" data-mode="xtream">
+          Conta Xtream
+        </button>
+      </div>
+
+      <input type="hidden" name="mode" id="mode" value="m3u">
+
+      <div id="m3uFields">
+        <label>URL da lista M3U</label>
+        <input
+          name="m3uUrl"
+          placeholder="http://servidor/get.php?..."
+        >
+      </div>
+
+      <div id="xtreamFields" class="hidden">
+        <label>Servidor Xtream</label>
+        <input
+          name="xtreamServer"
+          placeholder="http://servidor:porta"
+        >
+
+        <div class="grid">
+          <div>
+            <label>Usuario</label>
+            <input
+              name="username"
+              autocomplete="username"
+            >
+          </div>
+
+          <div>
+            <label>Senha</label>
+            <input
+              name="password"
+              type="password"
+              autocomplete="current-password"
+            >
+          </div>
+        </div>
+      </div>
+
+      <label>URL EPG (opcional)</label>
+      <input
+        name="epgUrl"
+        placeholder="https://.../epg.xml"
+      >
+
+      <button class="save" type="submit">
+        Salvar e enviar para a TV
+      </button>
+    </form>
+
+    <div class="hint">
+      Use somente listas e contas que voce possui autorizacao para usar.
+      O Roku consulta este servidor pelo codigo mostrado na tela e carrega
+      a lista automaticamente.
+    </div>
+
+    <form class="delete" method="post" action="/setup/delete">
+      <input
+        type="hidden"
+        name="code"
+        id="deleteCode"
+        value="${safeCode}"
+      >
+      <button type="submit">
+        Apagar configuracao deste codigo
+      </button>
+    </form>
+  </div>
+</div>
+
+<script>
+const tabs = document.querySelectorAll(".tab");
+const mode = document.getElementById("mode");
+const m3u = document.getElementById("m3uFields");
+const xtream = document.getElementById("xtreamFields");
+const code = document.querySelector('input[name="code"]');
+const deleteCode = document.getElementById("deleteCode");
+
+function setMode(value) {
+  mode.value = value;
+
+  tabs.forEach(btn => {
+    btn.classList.toggle(
+      "active",
+      btn.dataset.mode === value
+    );
+  });
+
+  m3u.classList.toggle(
+    "hidden",
+    value !== "m3u"
+  );
+
+  xtream.classList.toggle(
+    "hidden",
+    value !== "xtream"
+  );
+}
+
+tabs.forEach(btn => {
+  btn.addEventListener("click", () => {
+    setMode(btn.dataset.mode);
+  });
+});
+
+code.addEventListener("input", () => {
+  code.value =
+    code.value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  deleteCode.value = code.value;
+});
+</script>
+</body>
+</html>`;
+}
+
+loadDeviceConfigs();
+
+app.get("/setup", (req, res) => {
+  const code =
+    normalizeDeviceCode(req.query.code);
+
+  const saved =
+    String(req.query.saved || "") === "1";
+
+  const deleted =
+    String(req.query.deleted || "") === "1";
+
+  let message = "";
+
+  if (saved) {
+    message =
+      "Lista salva. Volte para a TV; o app vai detectar a configuracao.";
+  } else if (deleted) {
+    message =
+      "Configuracao apagada.";
+  }
+
+  res
+    .status(200)
+    .type("html")
+    .send(
+      setupPage(message, code)
+    );
+});
+
+app.post("/setup/save", (req, res) => {
+  const code =
+    normalizeDeviceCode(req.body.code);
+
+  if (!validDeviceCode(code)) {
+    return res
+      .status(400)
+      .type("html")
+      .send(
+        setupPage(
+          "Codigo invalido. Digite exatamente o codigo mostrado na TV.",
+          code
+        )
+      );
+  }
+
+  const mode =
+    String(req.body.mode || "m3u")
+      .trim()
+      .toLowerCase();
+
+  const name =
+    String(req.body.name || "Minha IPTV")
+      .trim()
+      .slice(0, 80) ||
+    "Minha IPTV";
+
+  let m3uUrl = "";
+
+  if (mode === "xtream") {
+    m3uUrl =
+      buildXtreamM3u(
+        req.body.xtreamServer,
+        String(req.body.username || "").trim(),
+        String(req.body.password || "")
+      );
+  } else {
+    m3uUrl =
+      normalizeHttpUrl(req.body.m3uUrl);
+  }
+
+  if (!m3uUrl) {
+    return res
+      .status(400)
+      .type("html")
+      .send(
+        setupPage(
+          "Confira os dados da lista. A URL ou a conta Xtream nao e valida.",
+          code
+        )
+      );
+  }
+
+  const epgUrl =
+    normalizeHttpUrl(req.body.epgUrl);
+
+  deviceConfigs.set(code, {
+    name,
+    mode:
+      mode === "xtream"
+        ? "xtream"
+        : "m3u",
+    m3uUrl,
+    epgUrl,
+    updatedAt:
+      new Date().toISOString()
+  });
+
+  deviceM3uCache.delete(code);
+  saveDeviceConfigs();
+
+  return res.redirect(
+    "/setup?code=" +
+    encodeURIComponent(code) +
+    "&saved=1"
+  );
+});
+
+app.post("/setup/delete", (req, res) => {
+  const code =
+    normalizeDeviceCode(req.body.code);
+
+  if (validDeviceCode(code)) {
+    deviceConfigs.delete(code);
+    deviceM3uCache.delete(code);
+    saveDeviceConfigs();
+  }
+
+  return res.redirect(
+    "/setup?code=" +
+    encodeURIComponent(code) +
+    "&deleted=1"
+  );
+});
+
+app.get("/api/device/:code", (req, res) => {
+  const code =
+    normalizeDeviceCode(req.params.code);
+
+  if (!validDeviceCode(code)) {
+    return res.status(400).json({
+      ok: false,
+      configured: false,
+      error: "Codigo invalido"
+    });
+  }
+
+  const cfg =
+    deviceConfigs.get(code);
+
+  if (!cfg) {
+    return res.json({
+      ok: true,
+      configured: false,
+      code
+    });
+  }
+
+  return res.json({
+    ok: true,
+    configured: true,
+    code,
+    name: cfg.name || "Minha IPTV",
+    mode: cfg.mode || "m3u",
+    epgConfigured:
+      Boolean(cfg.epgUrl),
+    updatedAt:
+      cfg.updatedAt || null
+  });
+});
+
+async function downloadDeviceM3u(code) {
+  const cfg =
+    deviceConfigs.get(code);
+
+  if (!cfg || !cfg.m3uUrl) {
+    throw new Error(
+      "Nenhuma lista cadastrada para este dispositivo"
+    );
+  }
+
+  const cached =
+    deviceM3uCache.get(code);
+
+  if (
+    cached &&
+    Date.now() - cached.time < DEVICE_CACHE_MS
+  ) {
+    return cached.text;
+  }
+
+  let rawText = "";
+  let firstError = "";
+
+  try {
+    rawText =
+      await fetchIptvCandidate(
+        cfg.m3uUrl,
+        "Dispositivo " + code
+      );
+  } catch (error) {
+    firstError = error.message;
+  }
+
+  if (!rawText) {
+    const alt =
+      httpsVariant(cfg.m3uUrl);
+
+    if (alt) {
+      try {
+        rawText =
+          await fetchIptvCandidate(
+            alt,
+            "Dispositivo " + code + " HTTPS"
+          );
+      } catch (error) {
+        throw new Error(
+          firstError +
+          " | " +
+          error.message
+        );
+      }
+    }
+  }
+
+  if (!rawText) {
+    throw new Error(
+      firstError ||
+      "Nao foi possivel obter a lista"
+    );
+  }
+
+  const cleaned =
+    cleanM3u(rawText);
+
+  if (!cleaned) {
+    throw new Error(
+      "A lista nao possui itens M3U validos"
+    );
+  }
+
+  deviceM3uCache.set(code, {
+    time: Date.now(),
+    text: cleaned
+  });
+
+  return cleaned;
+}
+
+app.get("/iptv/device/:code/m3u", async (req, res) => {
+  const code =
+    normalizeDeviceCode(req.params.code);
+
+  if (!validDeviceCode(code)) {
+    return res
+      .status(400)
+      .type("text/plain")
+      .send("Codigo invalido");
+  }
+
+  try {
+    const m3u =
+      await downloadDeviceM3u(code);
+
+    res.set({
+      "Content-Type":
+        "application/vnd.apple.mpegurl; charset=utf-8",
+      "Cache-Control":
+        "no-store, no-cache, must-revalidate",
+      "Pragma": "no-cache",
+      "Expires": "0"
+    });
+
+    return res
+      .status(200)
+      .send(m3u);
+  } catch (error) {
+    console.error(
+      "IPTV DEVICE:",
+      code,
+      error.message
+    );
+
+    return res
+      .status(502)
+      .type("text/plain")
+      .send(
+        "Erro IPTV: " +
+        error.message
+      );
   }
 });
 
