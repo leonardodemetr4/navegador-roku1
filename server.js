@@ -836,6 +836,202 @@ function buildXtreamM3u(server, username, password) {
   return u.toString();
 }
 
+function buildXtreamApiUrl(server, username, password, action = "") {
+  const base = normalizeHttpUrl(server);
+  if (!base || !username || !password) return "";
+
+  const u = new URL(base);
+  u.pathname = u.pathname.replace(/\/+$/, "") + "/player_api.php";
+  u.search = "";
+  u.searchParams.set("username", String(username));
+  u.searchParams.set("password", String(password));
+  if (action) u.searchParams.set("action", action);
+  return u.toString();
+}
+
+function buildXtreamGetUrl(server, username, password, output = "ts") {
+  const base = normalizeHttpUrl(server);
+  if (!base || !username || !password) return "";
+
+  const u = new URL(base);
+  u.pathname = u.pathname.replace(/\/+$/, "") + "/get.php";
+  u.search = "";
+  u.searchParams.set("username", String(username));
+  u.searchParams.set("password", String(password));
+  u.searchParams.set("type", "m3u_plus");
+  u.searchParams.set("output", output);
+  return u.toString();
+}
+
+async function fetchXtreamJson(url, label) {
+  const result = await requestText(url, 25000, 0, "VLC/3.0.20 LibVLC/3.0.20");
+
+  console.log(
+    "XTREAM",
+    label,
+    "HTTP",
+    result.status,
+    "bytes",
+    result.body.length,
+    "content-type",
+    result.contentType
+  );
+
+  if (result.status < 200 || result.status >= 300) {
+    throw new Error(label + " respondeu HTTP " + result.status);
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(result.body);
+  } catch {
+    throw new Error(label + " nao retornou JSON valido");
+  }
+
+  return parsed;
+}
+
+async function validateXtreamConfig(cfg) {
+  if (!cfg || !cfg.server || !cfg.username || !cfg.password) {
+    throw new Error("Dados Xtream incompletos");
+  }
+
+  const url = buildXtreamApiUrl(
+    cfg.server,
+    cfg.username,
+    cfg.password
+  );
+
+  const data = await fetchXtreamJson(url, "player_api");
+
+  const auth = data && data.user_info ? data.user_info : {};
+  const authValue = String(auth.auth == null ? "" : auth.auth);
+  const status = String(auth.status || "");
+
+  const active =
+    authValue === "1" ||
+    status.toLowerCase() === "active";
+
+  if (!active) {
+    throw new Error(
+      "Conta Xtream nao autenticada" +
+      (status ? " (" + status + ")" : "")
+    );
+  }
+
+  return {
+    active: true,
+    status: status || "Active",
+    expDate: auth.exp_date || null,
+    maxConnections: auth.max_connections || null,
+    activeConnections: auth.active_cons || null,
+    serverInfo: data.server_info || {}
+  };
+}
+
+function m3uAttr(value) {
+  return String(value == null ? "" : value)
+    .replace(/"/g, "'")
+    .replace(/[\r\n]+/g, " ")
+    .trim();
+}
+
+function m3uName(value) {
+  return String(value == null ? "" : value)
+    .replace(/[\r\n]+/g, " ")
+    .trim();
+}
+
+async function buildXtreamM3uFromApi(cfg) {
+  const base = normalizeHttpUrl(cfg.server);
+  if (!base) throw new Error("Servidor Xtream invalido");
+
+  const baseUrl = new URL(base);
+  const origin =
+    baseUrl.protocol + "//" +
+    baseUrl.hostname +
+    (baseUrl.port ? ":" + baseUrl.port : "");
+
+  const user = encodeURIComponent(cfg.username);
+  const pass = encodeURIComponent(cfg.password);
+
+  const liveUrl = buildXtreamApiUrl(
+    cfg.server, cfg.username, cfg.password, "get_live_streams"
+  );
+  const vodUrl = buildXtreamApiUrl(
+    cfg.server, cfg.username, cfg.password, "get_vod_streams"
+  );
+
+  let live = [];
+  let vod = [];
+
+  try {
+    const v = await fetchXtreamJson(liveUrl, "get_live_streams");
+    if (Array.isArray(v)) live = v;
+  } catch (e) {
+    console.log("XTREAM live falhou:", e.message);
+  }
+
+  try {
+    const v = await fetchXtreamJson(vodUrl, "get_vod_streams");
+    if (Array.isArray(v)) vod = v;
+  } catch (e) {
+    console.log("XTREAM vod falhou:", e.message);
+  }
+
+  if (!live.length && !vod.length) {
+    throw new Error("API Xtream autenticou, mas nao retornou canais ou filmes");
+  }
+
+  const lines = ["#EXTM3U"];
+  const maxItems = 2500;
+  let count = 0;
+
+  for (const item of live) {
+    if (count >= maxItems) break;
+    const id = item && item.stream_id;
+    if (!id) continue;
+
+    const name = m3uName(item.name || ("Canal " + id));
+    const logo = m3uAttr(item.stream_icon || "");
+    const group = m3uAttr(item.category_name || "TV ao vivo");
+
+    lines.push(
+      '#EXTINF:-1 tvg-logo="' + logo + '" group-title="' + group + '",' + name
+    );
+    lines.push(
+      origin + "/live/" + user + "/" + pass + "/" + id + ".ts"
+    );
+    count++;
+  }
+
+  for (const item of vod) {
+    if (count >= maxItems) break;
+    const id = item && item.stream_id;
+    if (!id) continue;
+
+    const ext = String(item.container_extension || "mp4").replace(/[^a-zA-Z0-9]/g, "") || "mp4";
+    const name = m3uName(item.name || ("Filme " + id));
+    const logo = m3uAttr(item.stream_icon || "");
+    const group = m3uAttr(item.category_name || "Filmes");
+
+    lines.push(
+      '#EXTINF:-1 tvg-logo="' + logo + '" group-title="' + group + '",' + name
+    );
+    lines.push(
+      origin + "/movie/" + user + "/" + pass + "/" + id + "." + ext
+    );
+    count++;
+  }
+
+  if (count === 0) {
+    throw new Error("API Xtream nao possui itens reproduziveis");
+  }
+
+  console.log("XTREAM M3U sintetizada:", count, "itens");
+  return lines.join("\n") + "\n";
+}
+
 function setupPage(message = "", codeValue = "", serverValue = "") {
   const safeMessage = htmlEscape(message);
   const safeCode = htmlEscape(codeValue);
@@ -874,7 +1070,7 @@ button.save{width:100%;margin-top:24px;padding:15px;border:0;border-radius:11px;
 <body>
 <div class="wrap">
   <div class="brand">ELIN PLAY</div>
-  <div class="sub">Configuração com servidor IPTV • v3</div>
+  <div class="sub">Configuração com servidor IPTV • v4 Xtream</div>
 
   <div class="card">
     ${safeMessage ? `<div class="notice">${safeMessage}</div>` : ""}
@@ -1025,8 +1221,10 @@ app.post("/setup/save", (req, res) => {
 
   deviceConfigs.set(code, {
     name: "Minha IPTV",
-    mode: "login",
+    mode: "xtream",
     server,
+    username,
+    password,
     m3uUrl,
     epgUrl: "",
     updatedAt: new Date().toISOString()
@@ -1094,69 +1292,90 @@ app.get("/api/device/:code", (req, res) => {
 });
 
 async function downloadDeviceM3u(code) {
-  const cfg =
-    deviceConfigs.get(code);
+  const cfg = deviceConfigs.get(code);
 
-  if (!cfg || !cfg.m3uUrl) {
-    throw new Error(
-      "Nenhuma lista cadastrada para este dispositivo"
-    );
+  if (!cfg) {
+    throw new Error("Nenhuma lista cadastrada para este dispositivo");
   }
 
-  const cached =
-    deviceM3uCache.get(code);
-
-  if (
-    cached &&
-    Date.now() - cached.time < DEVICE_CACHE_MS
-  ) {
+  const cached = deviceM3uCache.get(code);
+  if (cached && Date.now() - cached.time < DEVICE_CACHE_MS) {
     return cached.text;
   }
 
+  const errors = [];
   let rawText = "";
-  let firstError = "";
 
-  try {
-    rawText =
-      await fetchIptvCandidate(
+  // 1) Tenta a URL M3U padrão salva.
+  if (cfg.m3uUrl) {
+    try {
+      rawText = await fetchIptvCandidate(
         cfg.m3uUrl,
         "Dispositivo " + code
       );
-  } catch (error) {
-    firstError = error.message;
-  }
+    } catch (error) {
+      errors.push(error.message);
+    }
 
-  if (!rawText) {
-    try {
-      rawText =
-        await fetchIptvCandidate(
+    if (!rawText) {
+      try {
+        rawText = await fetchIptvCandidate(
           cfg.m3uUrl,
           "Dispositivo " + code + " VLC",
           "VLC/3.0.20 LibVLC/3.0.20"
         );
+      } catch (error) {
+        errors.push(error.message);
+      }
+    }
+  }
+
+  // 2) Se o login foi salvo, valida a conta pela API Xtream.
+  if (!rawText && cfg.server && cfg.username && cfg.password) {
+    try {
+      await validateXtreamConfig(cfg);
+
+      // Alguns painéis respondem melhor com output=ts.
+      for (const output of ["ts", "m3u8"]) {
+        try {
+          const url = buildXtreamGetUrl(
+            cfg.server,
+            cfg.username,
+            cfg.password,
+            output
+          );
+
+          rawText = await fetchIptvCandidate(
+            url,
+            "Xtream get.php " + output,
+            "VLC/3.0.20 LibVLC/3.0.20"
+          );
+
+          if (rawText) break;
+        } catch (error) {
+          errors.push(error.message);
+        }
+      }
+
+      // 3) Se get.php não entrega M3U, monta uma M3U usando player_api.php.
+      if (!rawText) {
+        rawText = await buildXtreamM3uFromApi(cfg);
+      }
     } catch (error) {
-      throw new Error(
-        firstError +
-        " | " +
-        error.message
-      );
+      errors.push(error.message);
     }
   }
 
   if (!rawText) {
     throw new Error(
-      firstError ||
-      "Nao foi possivel obter a lista"
+      errors.filter(Boolean).join(" | ") ||
+      "Nao foi possivel obter a lista IPTV"
     );
   }
 
-  const cleaned =
-    cleanM3u(rawText);
-
+  const cleaned = cleanM3u(rawText);
   if (!cleaned) {
-    throw new Error(
-      "A lista nao possui itens M3U validos"
-    );
+    throw new Error("A lista nao possui itens M3U validos");
   }
 
   deviceM3uCache.set(code, {
@@ -1166,6 +1385,64 @@ async function downloadDeviceM3u(code) {
 
   return cleaned;
 }
+
+
+app.get("/iptv/device/:code/xtream-status", async (req, res) => {
+  const code = normalizeDeviceCode(req.params.code);
+
+  if (!validDeviceCode(code)) {
+    return res.status(400).json({
+      ok: false,
+      error: "Codigo invalido"
+    });
+  }
+
+  const cfg = deviceConfigs.get(code);
+
+  if (!cfg) {
+    return res.status(404).json({
+      ok: false,
+      configured: false,
+      error: "Nenhuma lista cadastrada para este dispositivo"
+    });
+  }
+
+  if (!cfg.server || !cfg.username || !cfg.password) {
+    return res.status(400).json({
+      ok: false,
+      configured: true,
+      xtream: false,
+      error: "Configuracao antiga sem dados Xtream. Salve a conta novamente no /setup."
+    });
+  }
+
+  try {
+    const info = await validateXtreamConfig(cfg);
+
+    return res.json({
+      ok: true,
+      configured: true,
+      xtream: true,
+      authenticated: true,
+      status: info.status,
+      expDate: info.expDate,
+      maxConnections: info.maxConnections,
+      activeConnections: info.activeConnections,
+      serverTimeZone:
+        info.serverInfo && info.serverInfo.timezone
+          ? info.serverInfo.timezone
+          : null
+    });
+  } catch (error) {
+    return res.status(502).json({
+      ok: false,
+      configured: true,
+      xtream: true,
+      authenticated: false,
+      error: error.message
+    });
+  }
+});
 
 app.get("/iptv/device/:code/m3u", async (req, res) => {
   const code =
