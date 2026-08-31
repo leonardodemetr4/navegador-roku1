@@ -3,8 +3,28 @@ const { chromium } = require("playwright");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
+
 const sessions = new Map();
 let browser;
+
+// ============================================================
+// IPTV
+// ============================================================
+
+const IPTV_M3U_URL =
+  process.env.IPTV_M3U_URL || "";
+
+let iptvCache = {
+  text: "",
+  time: 0
+};
+
+const IPTV_CACHE_TIME =
+  5 * 60 * 1000;
+
+// ============================================================
+// NAVEGADOR
+// ============================================================
 
 async function getBrowser() {
   if (!browser) {
@@ -711,12 +731,230 @@ ${cards}
 `;
 }
 
+// ============================================================
+// IPTV
+// ============================================================
+
+function cleanM3u(text) {
+  if (
+    !text ||
+    typeof text !== "string"
+  ) {
+    return "";
+  }
+
+  const lines =
+    text
+      .replace(/\r/g, "")
+      .split("\n");
+
+  const output = [
+    "#EXTM3U"
+  ];
+
+  let extinf = "";
+  let total = 0;
+
+  const MAX_ITEMS =
+    2500;
+
+  for (
+    const raw
+    of lines
+  ) {
+    const line =
+      raw.trim();
+
+    if (!line) {
+      continue;
+    }
+
+    if (
+      line.startsWith(
+        "#EXTINF"
+      )
+    ) {
+      extinf = line;
+      continue;
+    }
+
+    if (
+      extinf &&
+      !line.startsWith("#")
+    ) {
+      output.push(
+        extinf
+      );
+
+      output.push(
+        line
+      );
+
+      extinf = "";
+
+      total++;
+
+      if (
+        total >=
+        MAX_ITEMS
+      ) {
+        break;
+      }
+    }
+  }
+
+  if (
+    total === 0
+  ) {
+    return "";
+  }
+
+  return (
+    output.join("\n") +
+    "\n"
+  );
+}
+
+async function downloadIptvList() {
+  if (
+    !IPTV_M3U_URL
+  ) {
+    throw new Error(
+      "IPTV_M3U_URL nao configurada"
+    );
+  }
+
+  const now =
+    Date.now();
+
+  if (
+    iptvCache.text &&
+    now -
+      iptvCache.time <
+      IPTV_CACHE_TIME
+  ) {
+    console.log(
+      "IPTV: usando cache"
+    );
+
+    return iptvCache.text;
+  }
+
+  console.log(
+    "IPTV: buscando lista..."
+  );
+
+  const controller =
+    new AbortController();
+
+  const timeout =
+    setTimeout(
+      () => {
+        controller.abort();
+      },
+      25000
+    );
+
+  try {
+    const response =
+      await fetch(
+        IPTV_M3U_URL,
+        {
+          method: "GET",
+
+          redirect:
+            "follow",
+
+          signal:
+            controller.signal,
+
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
+
+            "Accept":
+              "application/x-mpegURL,application/vnd.apple.mpegurl,text/plain,*/*",
+
+            "Accept-Language":
+              "pt-BR,pt;q=0.9,en;q=0.8",
+
+            "Connection":
+              "close"
+          }
+        }
+      );
+
+    console.log(
+      "IPTV HTTP:",
+      response.status
+    );
+
+    if (
+      !response.ok
+    ) {
+      throw new Error(
+        "Servidor IPTV HTTP " +
+        response.status
+      );
+    }
+
+    const text =
+      await response.text();
+
+    console.log(
+      "IPTV bytes recebidos:",
+      text.length
+    );
+
+    if (
+      !text ||
+      (
+        !text.includes(
+          "#EXTM3U"
+        ) &&
+        !text.includes(
+          "#EXTINF"
+        )
+      )
+    ) {
+      throw new Error(
+        "Resposta nao parece M3U"
+      );
+    }
+
+    const cleaned =
+      cleanM3u(text);
+
+    if (!cleaned) {
+      throw new Error(
+        "Nenhum item IPTV valido encontrado"
+      );
+    }
+
+    iptvCache = {
+      text: cleaned,
+      time: Date.now()
+    };
+
+    return cleaned;
+  } finally {
+    clearTimeout(
+      timeout
+    );
+  }
+}
+
+// ============================================================
+// ROTAS PRINCIPAIS
+// ============================================================
+
 app.get(
   "/",
   (req, res) => {
     res.send(
-      "<h1>Navegador Roku V6.3</h1>" +
-      "<p>Servidor online</p>"
+      "<h1>Navegador Roku V6.3 + IPTV</h1>" +
+      "<p>Servidor online</p>" +
+      "<p>IPTV: /iptv/m3u</p>"
     );
   }
 );
@@ -726,11 +964,93 @@ app.get(
   (req, res) => {
     res.json({
       ok: true,
+
       service:
-        "roku-v6.3"
+        "roku-v6.3-iptv",
+
+      iptvConfigured:
+        Boolean(
+          IPTV_M3U_URL
+        ),
+
+      sessions:
+        sessions.size
     });
   }
 );
+
+// ============================================================
+// ROTA IPTV
+// ============================================================
+
+app.get(
+  "/iptv/m3u",
+  async (req, res) => {
+    try {
+      if (
+        !IPTV_M3U_URL
+      ) {
+        return res
+          .status(500)
+          .type("text/plain")
+          .send(
+            "IPTV_M3U_URL nao configurada no Render"
+          );
+      }
+
+      const m3u =
+        await downloadIptvList();
+
+      res.set({
+        "Content-Type":
+          "application/vnd.apple.mpegurl; charset=utf-8",
+
+        "Cache-Control":
+          "no-store, no-cache, must-revalidate",
+
+        "Pragma":
+          "no-cache",
+
+        "Expires":
+          "0"
+      });
+
+      return res
+        .status(200)
+        .send(m3u);
+
+    } catch (error) {
+      console.error(
+        "IPTV ERRO:",
+        error.message
+      );
+
+      if (
+        error.name ===
+        "AbortError"
+      ) {
+        return res
+          .status(504)
+          .type("text/plain")
+          .send(
+            "Timeout ao conectar ao servidor IPTV"
+          );
+      }
+
+      return res
+        .status(502)
+        .type("text/plain")
+        .send(
+          "Erro IPTV: " +
+          error.message
+        );
+    }
+  }
+);
+
+// ============================================================
+// NAVEGADOR - ABRIR
+// ============================================================
 
 app.get(
   "/v5/open",
@@ -798,6 +1118,10 @@ app.get(
     }
   }
 );
+
+// ============================================================
+// NAVEGADOR - PESQUISA
+// ============================================================
 
 app.get(
   "/v5/search",
@@ -882,6 +1206,10 @@ app.get(
   }
 );
 
+// ============================================================
+// YOUTUBE
+// ============================================================
+
 app.get(
   "/v6/youtube-search",
   async (req, res) => {
@@ -956,6 +1284,10 @@ app.get(
   }
 );
 
+// ============================================================
+// CLIQUE
+// ============================================================
+
 app.get(
   "/v5/click",
   async (req, res) => {
@@ -989,350 +1321,4 @@ app.get(
       !Number.isFinite(y)
     ) {
       return res
-        .status(400)
-        .send(
-          "Coordenadas invalidas"
-        );
-    }
-
-    const px =
-      Math.max(
-        0,
-        Math.min(
-          1279,
-          Math.round(x)
-        )
-      );
-
-    const py =
-      Math.max(
-        0,
-        Math.min(
-          719,
-          Math.round(y)
-        )
-      );
-
-    try {
-      const href =
-        await session.page.evaluate(
-          ({ x, y }) => {
-            const elements =
-              Array.from(
-                document.querySelectorAll(
-                  "a,button,input,[role='button'],[onclick]"
-                )
-              );
-
-            let best = null;
-            let distance = Infinity;
-
-            for (
-              const element
-              of elements
-            ) {
-              const rect =
-                element.getBoundingClientRect();
-
-              if (
-                rect.width < 2 ||
-                rect.height < 2
-              ) {
-                continue;
-              }
-
-              const nx =
-                Math.max(
-                  rect.left,
-                  Math.min(
-                    x,
-                    rect.right
-                  )
-                );
-
-              const ny =
-                Math.max(
-                  rect.top,
-                  Math.min(
-                    y,
-                    rect.bottom
-                  )
-                );
-
-              const d =
-                Math.hypot(
-                  nx - x,
-                  ny - y
-                );
-
-              if (
-                d < distance
-              ) {
-                distance = d;
-                best = element;
-              }
-            }
-
-            if (
-              !best ||
-              distance > 170
-            ) {
-              return "";
-            }
-
-            const anchor =
-              best.tagName
-                .toLowerCase() ===
-              "a"
-                ? best
-                : best.closest("a");
-
-            return (
-              anchor &&
-              anchor.href
-                ? anchor.href
-                : ""
-            );
-          },
-          {
-            x: px,
-            y: py
-          }
-        );
-
-      if (href) {
-        await openUrl(
-          session.page,
-          href
-        );
-      } else {
-        try {
-          await session.page
-            .mouse
-            .click(
-              px,
-              py
-            );
-
-          await waitVisual(
-            session.page,
-            2200
-          );
-        } catch {}
-      }
-
-      return shot(
-        session.page,
-        res
-      );
-    } catch (error) {
-      console.error(
-        "CLICK:",
-        error
-      );
-
-      return res
-        .status(500)
-        .send(
-          "Erro interno"
-        );
-    }
-  }
-);
-
-app.get(
-  "/v5/back",
-  async (req, res) => {
-    const session =
-      getSession(
-        String(
-          req.query.session || ""
-        ).trim()
-      );
-
-    if (!session) {
-      return res
-        .status(404)
-        .send(
-          "Sessao nao encontrada"
-        );
-    }
-
-    try {
-      await session.page.goBack({
-        waitUntil:
-          "domcontentloaded",
-        timeout:
-          18000
-      });
-
-      await waitVisual(
-        session.page,
-        2500
-      );
-    } catch {}
-
-    return shot(
-      session.page,
-      res
-    );
-  }
-);
-
-app.get(
-  "/v5/forward",
-  async (req, res) => {
-    const session =
-      getSession(
-        String(
-          req.query.session || ""
-        ).trim()
-      );
-
-    if (!session) {
-      return res
-        .status(404)
-        .send(
-          "Sessao nao encontrada"
-        );
-    }
-
-    try {
-      await session.page.goForward({
-        waitUntil:
-          "domcontentloaded",
-        timeout:
-          18000
-      });
-
-      await waitVisual(
-        session.page,
-        2500
-      );
-    } catch {}
-
-    return shot(
-      session.page,
-      res
-    );
-  }
-);
-
-app.get(
-  "/v5/scroll",
-  async (req, res) => {
-    const session =
-      getSession(
-        String(
-          req.query.session || ""
-        ).trim()
-      );
-
-    if (!session) {
-      return res
-        .status(404)
-        .send(
-          "Sessao nao encontrada"
-        );
-    }
-
-    let dy =
-      Number(
-        req.query.dy
-      );
-
-    if (!Number.isFinite(dy)) {
-      dy = 700;
-    }
-
-    dy =
-      Math.max(
-        -1500,
-        Math.min(
-          1500,
-          dy
-        )
-      );
-
-    try {
-      await session.page.evaluate(
-        amount => {
-          window.scrollBy(
-            0,
-            amount
-          );
-        },
-        dy
-      );
-
-      await waitVisual(
-        session.page,
-        1000
-      );
-    } catch {}
-
-    return shot(
-      session.page,
-      res
-    );
-  }
-);
-
-setInterval(
-  async () => {
-    const now =
-      Date.now();
-
-    for (
-      const [
-        id,
-        session
-      ]
-      of sessions
-    ) {
-      if (
-        now -
-          session.last >
-        30 * 60 * 1000
-      ) {
-        try {
-          await session
-            .context
-            .close();
-        } catch {}
-
-        sessions.delete(
-          id
-        );
-      }
-    }
-  },
-  60000
-);
-
-app.listen(
-  PORT,
-  "0.0.0.0",
-  () => {
-    console.log(
-      "Navegador Roku V6.3 iniciado na porta " +
-      PORT
-    );
-
-    console.log(
-      "Modo universal ativado"
-    );
-
-    if (
-      process.env.YOUTUBE_API_KEY
-    ) {
-      console.log(
-        "YouTube API ativada"
-      );
-    } else {
-      console.log(
-        "YouTube API sem chave - usando fallback"
-      );
-    }
-  }
-);
+        .
