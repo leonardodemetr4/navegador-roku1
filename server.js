@@ -379,7 +379,7 @@ function cleanM3u(text) {
   return output.join("\n") + "\n";
 }
 
-function requestText(rawUrl, timeoutMs = 25000, redirects = 0) {
+function requestText(rawUrl, timeoutMs = 25000, redirects = 0, userAgent = "") {
   return new Promise((resolve, reject) => {
     if (redirects > 5) {
       reject(new Error("Muitos redirecionamentos"));
@@ -405,6 +405,7 @@ function requestText(rawUrl, timeoutMs = 25000, redirects = 0) {
       method: "GET",
       headers: {
         "User-Agent":
+          userAgent ||
           "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 " +
           "Chrome/131.0.0.0 Safari/537.36",
         "Accept":
@@ -431,7 +432,8 @@ function requestText(rawUrl, timeoutMs = 25000, redirects = 0) {
         requestText(
           nextUrl,
           timeoutMs,
-          redirects + 1
+          redirects + 1,
+          userAgent
         )
           .then(resolve)
           .catch(reject);
@@ -487,11 +489,11 @@ function httpsVariant(rawUrl) {
   return "";
 }
 
-async function fetchIptvCandidate(url, label) {
+async function fetchIptvCandidate(url, label, userAgent = "") {
   console.log("IPTV tentativa:", label);
 
   const result =
-    await requestText(url, 25000);
+    await requestText(url, 25000, 0, userAgent);
 
   console.log(
     "IPTV",
@@ -562,28 +564,24 @@ async function downloadIptv() {
   }
 
   if (!rawText) {
-    const alt =
-      httpsVariant(IPTV_M3U_URL);
-
-    if (alt) {
-      try {
-        rawText =
-          await fetchIptvCandidate(
-            alt,
-            "HTTPS alternativo"
-          );
-      } catch (error) {
-        console.log(
-          "IPTV HTTPS alternativo falhou:",
-          error.message
+    try {
+      rawText =
+        await fetchIptvCandidate(
+          IPTV_M3U_URL,
+          "URL original VLC",
+          "VLC/3.0.20 LibVLC/3.0.20"
         );
+    } catch (error) {
+      console.log(
+        "IPTV segunda tentativa HTTP falhou:",
+        error.message
+      );
 
-        throw new Error(
-          firstError +
-          " | " +
-          error.message
-        );
-      }
+      throw new Error(
+        firstError +
+        " | " +
+        error.message
+      );
     }
   }
 
@@ -1315,23 +1313,19 @@ async function downloadDeviceM3u(code) {
   }
 
   if (!rawText) {
-    const alt =
-      httpsVariant(cfg.m3uUrl);
-
-    if (alt) {
-      try {
-        rawText =
-          await fetchIptvCandidate(
-            alt,
-            "Dispositivo " + code + " HTTPS"
-          );
-      } catch (error) {
-        throw new Error(
-          firstError +
-          " | " +
-          error.message
+    try {
+      rawText =
+        await fetchIptvCandidate(
+          cfg.m3uUrl,
+          "Dispositivo " + code + " VLC",
+          "VLC/3.0.20 LibVLC/3.0.20"
         );
-      }
+    } catch (error) {
+      throw new Error(
+        firstError +
+        " | " +
+        error.message
+      );
     }
   }
 
