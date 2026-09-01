@@ -1151,7 +1151,7 @@ button.save{width:100%;margin-top:22px;padding:15px;border:0;border-radius:11px;
 <body>
 <div class="wrap">
   <div class="brand">ELIN PLAY</div>
-  <div class="sub">M3U Universal • v13 Stable</div>
+  <div class="sub">M3U Universal • v14 Streaming</div>
 
   <div class="card">
     ${safeMessage ? `<div class="notice">${safeMessage}</div>` : ""}
@@ -1563,6 +1563,256 @@ function publicBaseFromRequest(req) {
   return proto + "://" + host;
 }
 
+function streamM3uIncremental(rawUrl, userAgent = "", options = {}, redirects = 0) {
+  const idleMs = Number(options.idleMs || 10000);
+  const totalMs = Number(options.totalMs || 45000);
+  const maxItems = Number(options.maxItems || 5000);
+
+  return new Promise((resolve, reject) => {
+    if (redirects > 5) {
+      reject(new Error("Muitos redirecionamentos"));
+      return;
+    }
+
+    let parsed;
+    try {
+      parsed = new URL(rawUrl);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        throw new Error("protocolo invalido");
+      }
+    } catch {
+      reject(new Error("URL IPTV invalida"));
+      return;
+    }
+
+    const client = parsed.protocol === "https:" ? https : http;
+    const headers = {
+      "User-Agent": userAgent || "VLC/3.0.20 LibVLC/3.0.20",
+      "Accept": "application/x-mpegURL,application/vnd.apple.mpegurl,text/plain,*/*",
+      "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+      "Accept-Encoding": "identity",
+      "Connection": "close"
+    };
+
+    let settled = false;
+    let requestRef = null;
+    let responseRef = null;
+    let idleTimer = null;
+    let totalTimer = null;
+    let status = 0;
+    let contentType = "";
+    let receivedBytes = 0;
+    let preview = "";
+    let remainder = "";
+    let pendingInfo = "";
+    const output = ["#EXTM3U"];
+    let itemCount = 0;
+
+    const cleanup = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      if (totalTimer) clearTimeout(totalTimer);
+      idleTimer = null;
+      totalTimer = null;
+    };
+
+    const finalize = (reason = "fim") => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+
+      if (responseRef) {
+        try { responseRef.destroy(); } catch {}
+      }
+      if (requestRef) {
+        try { requestRef.destroy(); } catch {}
+      }
+
+      if (itemCount > 0) {
+        resolve({
+          ok: true,
+          status,
+          contentType,
+          text: output.join("\n") + "\n",
+          items: itemCount,
+          bytes: receivedBytes,
+          partial: reason !== "fim",
+          reason
+        });
+        return;
+      }
+
+      const safePreview = sanitizeDiagnosticPreview(preview);
+      const detail = [
+        "HTTP " + status,
+        contentType ? "tipo " + contentType : "",
+        receivedBytes ? "bytes " + receivedBytes : "",
+        safePreview ? "resposta: " + safePreview : ""
+      ].filter(Boolean).join("; ");
+
+      reject(new Error(
+        "Nao foi encontrada nenhuma entrada M3U valida" +
+        (detail ? " (" + detail + ")" : "")
+      ));
+    };
+
+    const resetIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        if (itemCount > 0) {
+          finalize("idle-timeout");
+        } else if (!settled) {
+          settled = true;
+          cleanup();
+          if (responseRef) {
+            try { responseRef.destroy(); } catch {}
+          }
+          if (requestRef) {
+            try { requestRef.destroy(); } catch {}
+          }
+          reject(new Error("Timeout sem receber entradas M3U validas"));
+        }
+      }, idleMs);
+    };
+
+    const processLine = rawLine => {
+      const line = String(rawLine || "").replace(/\r/g, "").trim();
+      if (!line) return;
+
+      if (line.startsWith("#EXTINF")) {
+        pendingInfo = line;
+        return;
+      }
+
+      if (pendingInfo && !line.startsWith("#")) {
+        output.push(pendingInfo);
+        output.push(line);
+        pendingInfo = "";
+        itemCount++;
+
+        if (itemCount >= maxItems) {
+          finalize("limite-itens");
+        }
+      }
+    };
+
+    const optionsReq = {
+      protocol: parsed.protocol,
+      hostname: parsed.hostname,
+      port: parsed.port || undefined,
+      path: parsed.pathname + parsed.search,
+      method: "GET",
+      family: 4,
+      headers,
+      rejectUnauthorized: false
+    };
+
+    requestRef = client.request(optionsReq, upstreamRes => {
+      responseRef = upstreamRes;
+      status = upstreamRes.statusCode || 0;
+      contentType = String(upstreamRes.headers["content-type"] || "");
+
+      if (
+        status >= 300 &&
+        status < 400 &&
+        upstreamRes.headers.location
+      ) {
+        const nextUrl = new URL(upstreamRes.headers.location, rawUrl).toString();
+        settled = true;
+        cleanup();
+        upstreamRes.resume();
+        streamM3uIncremental(nextUrl, userAgent, options, redirects + 1)
+          .then(resolve)
+          .catch(reject);
+        return;
+      }
+
+      if (status < 200 || status >= 300) {
+        upstreamRes.on("data", chunk => {
+          receivedBytes += chunk.length;
+          if (preview.length < 2048) preview += chunk.toString("utf8");
+        });
+        upstreamRes.on("end", () => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          reject(new Error(
+            "Servidor IPTV respondeu HTTP " + status +
+            (preview ? " - " + sanitizeDiagnosticPreview(preview) : "")
+          ));
+        });
+        resetIdle();
+        return;
+      }
+
+      resetIdle();
+
+      upstreamRes.on("data", chunk => {
+        if (settled) return;
+        receivedBytes += chunk.length;
+        if (preview.length < 2048) preview += chunk.toString("utf8");
+        resetIdle();
+
+        remainder += chunk.toString("utf8");
+        const lines = remainder.split(/\n/);
+        remainder = lines.pop() || "";
+        for (const line of lines) {
+          processLine(line);
+          if (settled) return;
+        }
+      });
+
+      upstreamRes.on("end", () => {
+        if (settled) return;
+        if (remainder) processLine(remainder);
+        finalize("fim");
+      });
+
+      upstreamRes.on("error", error => {
+        if (settled) return;
+        if (itemCount > 0) {
+          finalize("erro-apos-dados");
+        } else {
+          settled = true;
+          cleanup();
+          reject(error);
+        }
+      });
+    });
+
+    requestRef.setTimeout(idleMs, () => {
+      if (itemCount > 0) {
+        finalize("socket-timeout");
+      } else if (!settled) {
+        requestRef.destroy(new Error("Timeout ao conectar ao servidor IPTV"));
+      }
+    });
+
+    totalTimer = setTimeout(() => {
+      if (itemCount > 0) {
+        finalize("total-timeout");
+      } else if (!settled) {
+        settled = true;
+        cleanup();
+        try { requestRef.destroy(); } catch {}
+        reject(new Error("Tempo total excedido sem entradas M3U validas"));
+      }
+    }, totalMs);
+
+    requestRef.on("error", error => {
+      if (settled) return;
+      if (itemCount > 0) {
+        finalize("erro-apos-dados");
+      } else {
+        settled = true;
+        cleanup();
+        reject(error);
+      }
+    });
+
+    requestRef.end();
+  });
+}
+
 async function fetchPlaylistUniversal(url, code) {
   const attempts = [
     ["VLC", "VLC/3.0.20 LibVLC/3.0.20"],
@@ -1578,46 +1828,44 @@ async function fetchPlaylistUniversal(url, code) {
 
   for (const attempt of attempts) {
     try {
-      const result = await requestText(url, 30000, 0, attempt[1]);
+      const result = await streamM3uIncremental(url, attempt[1], {
+        idleMs: 10000,
+        totalMs: 45000,
+        maxItems: 5000
+      });
 
       console.log(
-        "IPTV UNIVERSAL M3U",
+        "IPTV V14 M3U",
         code,
         attempt[0],
         "HTTP",
         result.status,
         "bytes",
-        result.body.length,
+        result.bytes,
+        "items",
+        result.items,
+        "partial",
+        result.partial,
+        "reason",
+        result.reason,
         "type",
         result.contentType
       );
 
-      if (
-        result.status >= 200 &&
-        result.status < 300 &&
-        result.body &&
-        (
-          result.body.includes("#EXTM3U") ||
-          result.body.includes("#EXTINF")
-        )
-      ) {
+      if (result.ok && result.items > 0) {
         return {
           ok: true,
-          text: result.body,
-          method: attempt[0]
+          text: result.text,
+          method: attempt[0],
+          items: result.items,
+          partial: result.partial,
+          reason: result.reason
         };
       }
-
-      const preview = sanitizeDiagnosticPreview(result.body);
-
-      errors.push(
-        attempt[0] +
-        " HTTP " +
-        result.status +
-        (preview ? " resposta: " + preview : "")
-      );
     } catch (error) {
-      errors.push(attempt[0] + ": " + error.message);
+      const safe = sanitizeDiagnosticPreview(error.message);
+      errors.push(attempt[0] + ": " + safe);
+      console.error("IPTV V14 M3U", code, attempt[0], safe);
     }
   }
 
@@ -1863,12 +2111,12 @@ app.get("/iptv/device/:code/proxy.m3u", async (req, res) => {
   if (cfg.m3uText) {
     playlistText = String(cfg.m3uText);
     sourceUrl = cfg.m3uUrl || "https://local.elin.invalid/list.m3u";
-    console.log("IPTV V13 usando M3U cadastrada em texto:", code);
+    console.log("IPTV V14 usando M3U cadastrada em texto:", code);
   } else {
     const fetched = await fetchPlaylistUniversal(cfg.m3uUrl, code);
 
     if (!fetched.ok) {
-      console.error("IPTV V13 M3U:", code, fetched.error);
+      console.error("IPTV V14 M3U:", code, fetched.error);
 
       return res.status(502).type("text/plain").send(
         "O provedor respondeu, mas nao entregou uma M3U valida. " +
@@ -2244,7 +2492,7 @@ setInterval(async () => {
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(
-    "Navegador Roku V6.3 + IPTV Universal V13 Stable iniciado na porta " +
+    "Navegador Roku V6.3 + IPTV Universal V14 Streaming iniciado na porta " +
     PORT
   );
 
