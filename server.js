@@ -7,8 +7,8 @@ const path = require("path");
 const crypto = require("crypto");
 
 const app = express();
-app.use(express.urlencoded({ extended: false, limit: "32kb" }));
-app.use(express.json({ limit: "32kb" }));
+app.use(express.urlencoded({ extended: false, limit: "5mb" }));
+app.use(express.json({ limit: "1mb" }));
 const PORT = process.env.PORT || 10000;
 
 const IPTV_M3U_URL = process.env.IPTV_M3U_URL || "";
@@ -1117,78 +1117,63 @@ async function buildXtreamM3uFromApi(cfg) {
   return lines.join("\n") + "\n";
 }
 
-function setupPage(message = "", codeValue = "", m3uValue = "") {
+function setupPage(message = "", codeValue = "", m3uValue = "", rawValue = "") {
   const safeMessage = htmlEscape(message);
   const safeCode = htmlEscape(codeValue);
   const safeM3u = htmlEscape(m3uValue);
+  const safeRaw = htmlEscape(rawValue);
 
   return `<!doctype html>
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ELIN PLAY - M3U Direta</title>
+<title>ELIN PLAY - M3U Universal</title>
 <style>
 *{box-sizing:border-box}
-body{
-  margin:0;
-  min-height:100vh;
-  font-family:Arial,Helvetica,sans-serif;
-  background:radial-gradient(circle at 15% 5%,#173a66 0,#08182c 35%,#040b16 100%);
-  color:#eef9ff;
-}
-.wrap{width:min(720px,94%);margin:0 auto;padding:34px 0 60px}
+body{margin:0;min-height:100vh;font-family:Arial,Helvetica,sans-serif;background:radial-gradient(circle at 15% 5%,#173a66 0,#08182c 35%,#040b16 100%);color:#eef9ff}
+.wrap{width:min(760px,94%);margin:0 auto;padding:28px 0 60px}
 .brand{text-align:center;font-size:34px;font-weight:800;letter-spacing:2px;margin-bottom:8px}
-.sub{text-align:center;color:#9bcfe8;margin-bottom:28px}
-.card{background:rgba(7,24,43,.94);border:1px solid #1f577c;border-radius:16px;padding:24px;box-shadow:0 18px 60px rgba(0,0,0,.35)}
+.sub{text-align:center;color:#9bcfe8;margin-bottom:24px}
+.card{background:rgba(7,24,43,.95);border:1px solid #1f577c;border-radius:16px;padding:22px;box-shadow:0 18px 60px rgba(0,0,0,.35)}
 .notice{margin:0 0 18px;padding:13px 15px;border-radius:10px;background:#0d3049;border:1px solid #1db9de;color:#d9f9ff}
 label{display:block;font-weight:700;margin:16px 0 7px}
-input{width:100%;border:1px solid #2c5973;background:#071827;color:white;border-radius:10px;padding:14px 13px;font-size:16px;outline:none}
-input:focus{border-color:#32d5ff;box-shadow:0 0 0 2px rgba(50,213,255,.15)}
-button.save{width:100%;margin-top:24px;padding:15px;border:0;border-radius:11px;background:#0bb6df;color:#03131e;font-size:17px;font-weight:800;cursor:pointer}
+input,textarea{width:100%;border:1px solid #2c5973;background:#071827;color:white;border-radius:10px;padding:14px 13px;font-size:16px;outline:none}
+textarea{min-height:150px;resize:vertical;font-family:monospace;font-size:13px}
+input:focus,textarea:focus{border-color:#32d5ff;box-shadow:0 0 0 2px rgba(50,213,255,.15)}
+.or{text-align:center;color:#6f8ea3;font-weight:700;margin:15px 0 0}
+button.save{width:100%;margin-top:22px;padding:15px;border:0;border-radius:11px;background:#0bb6df;color:#03131e;font-size:17px;font-weight:800;cursor:pointer}
 .hint{color:#9ab9c9;line-height:1.5;font-size:14px;margin-top:18px}
-.delete{margin-top:16px;text-align:center}
-.delete button{border:1px solid #80505c;background:transparent;color:#ffb3c3;padding:10px 16px;border-radius:9px}
+.delete{margin-top:16px;text-align:center}.delete button{border:1px solid #80505c;background:transparent;color:#ffb3c3;padding:10px 16px;border-radius:9px}
 @media(max-width:650px){.wrap{padding-top:18px}.card{padding:18px}}
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="brand">ELIN PLAY</div>
-  <div class="sub">M3U Universal • v12</div>
+  <div class="sub">M3U Universal • v13 Stable</div>
 
   <div class="card">
     ${safeMessage ? `<div class="notice">${safeMessage}</div>` : ""}
 
     <form method="POST" action="/setup/save" enctype="application/x-www-form-urlencoded" id="setupForm">
       <label>Codigo exibido na TV</label>
-      <input
-        name="code"
-        maxlength="10"
-        autocomplete="off"
-        required
-        value="${safeCode}"
-        placeholder="Ex.: ABCD2345"
-        style="text-transform:uppercase"
-      >
+      <input name="code" maxlength="10" autocomplete="off" required value="${safeCode}" placeholder="Ex.: ABCD2345" style="text-transform:uppercase">
 
       <label>URL M3U completa</label>
-      <input
-        name="m3u"
-        type="url"
-        autocomplete="off"
-        required
-        value="${safeM3u}"
-        placeholder="http://servidor/get.php?username=...&password=..."
-      >
+      <input name="m3u" type="url" autocomplete="off" value="${safeM3u}" placeholder="http://servidor/get.php?...">
+
+      <div class="or">OU</div>
+
+      <label>Conteudo M3U (opcional)</label>
+      <textarea name="m3utext" placeholder="#EXTM3U&#10;#EXTINF:-1,Canal...&#10;http://...">${safeRaw}</textarea>
 
       <button class="save" type="submit">Salvar e enviar para a TV</button>
     </form>
 
     <div class="hint">
-      Cole a URL M3U completa exatamente como ela funciona no seu outro aplicativo.
-      O ELIN PLAY nao monta player_api.php e nao altera servidor, usuario, senha ou protocolo.
-      Use somente uma lista que voce possui autorizacao para usar.
+      Normalmente use apenas a URL. Se um provedor bloquear o acesso do servidor, voce tambem pode colar o conteudo de uma M3U que voce possui autorizacao para usar.
+      O app nao depende de um provedor especifico.
     </div>
 
     <form class="delete" method="post" action="/setup/delete">
@@ -1205,7 +1190,6 @@ code.addEventListener("input", () => {
   code.value = code.value.toUpperCase().replace(/[^A-Z0-9]/g, "");
   deleteCode.value = code.value;
 });
-
 const setupForm = document.getElementById("setupForm");
 const saveButton = setupForm.querySelector('button[type="submit"]');
 setupForm.addEventListener("submit", () => {
@@ -1270,27 +1254,59 @@ app.post("/setup/save", (req, res) => {
       setupPage(
         "Codigo invalido. Digite exatamente o codigo mostrado na TV.",
         code,
-        String(req.body.m3u || "")
+        String(req.body.m3u || ""),
+        String(req.body.m3utext || "")
       )
     );
   }
 
+  const rawInput = String(req.body.m3utext || "").trim();
+  const rawM3u =
+    rawInput &&
+    (rawInput.includes("#EXTM3U") || rawInput.includes("#EXTINF"))
+      ? rawInput
+      : "";
+
   const m3uUrl = normalizeHttpUrl(req.body.m3u);
 
-  if (!m3uUrl) {
+  if (!m3uUrl && !rawM3u) {
     return res.status(400).type("html").send(
       setupPage(
-        "URL M3U invalida. Cole o endereco completo iniciando por http:// ou https://.",
+        "Informe uma URL M3U valida ou cole um conteudo M3U valido.",
         code,
-        String(req.body.m3u || "")
+        String(req.body.m3u || ""),
+        String(req.body.m3utext || "")
+      )
+    );
+  }
+
+  if (rawInput && !rawM3u) {
+    return res.status(400).type("html").send(
+      setupPage(
+        "O conteudo colado nao parece uma M3U valida.",
+        code,
+        String(req.body.m3u || ""),
+        String(req.body.m3utext || "")
+      )
+    );
+  }
+
+  if (rawM3u && Buffer.byteLength(rawM3u, "utf8") > 4 * 1024 * 1024) {
+    return res.status(413).type("html").send(
+      setupPage(
+        "A M3U colada e muito grande. Limite: 4 MB.",
+        code,
+        String(req.body.m3u || ""),
+        ""
       )
     );
   }
 
   deviceConfigs.set(code, {
     name: "Minha IPTV",
-    mode: "m3u",
-    m3uUrl,
+    mode: rawM3u ? "m3u-text" : "m3u-url",
+    m3uUrl: m3uUrl || "",
+    m3uText: rawM3u || "",
     epgUrl: "",
     updatedAt: new Date().toISOString()
   });
@@ -1835,32 +1851,44 @@ app.get("/iptv/device/:code/proxy.m3u", async (req, res) => {
 
   const cfg = deviceConfigs.get(code);
 
-  if (!cfg || !cfg.m3uUrl) {
+  if (!cfg || (!cfg.m3uUrl && !cfg.m3uText)) {
     return res.status(404).type("text/plain").send(
       "Nenhuma M3U cadastrada para este dispositivo"
     );
   }
 
-  const fetched = await fetchPlaylistUniversal(cfg.m3uUrl, code);
+  let playlistText = "";
+  let sourceUrl = cfg.m3uUrl || "";
 
-  if (!fetched.ok) {
-    console.error("IPTV UNIVERSAL M3U:", code, fetched.error);
+  if (cfg.m3uText) {
+    playlistText = String(cfg.m3uText);
+    sourceUrl = cfg.m3uUrl || "https://local.elin.invalid/list.m3u";
+    console.log("IPTV V13 usando M3U cadastrada em texto:", code);
+  } else {
+    const fetched = await fetchPlaylistUniversal(cfg.m3uUrl, code);
 
-    return res.status(502).type("text/plain").send(
-      "Servidor IPTV nao entregou M3U. " + fetched.error
-    );
+    if (!fetched.ok) {
+      console.error("IPTV V13 M3U:", code, fetched.error);
+
+      return res.status(502).type("text/plain").send(
+        "O provedor respondeu, mas nao entregou uma M3U valida. " +
+        fetched.error
+      );
+    }
+
+    playlistText = fetched.text;
   }
 
   const rewritten = rewriteM3uForProxy(
-    fetched.text,
+    playlistText,
     code,
     publicBaseFromRequest(req),
-    cfg.m3uUrl
+    sourceUrl
   );
 
   if (!rewritten) {
-    return res.status(502).type("text/plain").send(
-      "M3U recebida, mas sem URLs reproduziveis"
+    return res.status(422).type("text/plain").send(
+      "A M3U foi recebida, mas nao contem URLs reproduziveis."
     );
   }
 
@@ -1868,8 +1896,7 @@ app.get("/iptv/device/:code/proxy.m3u", async (req, res) => {
     "Content-Type": "application/vnd.apple.mpegurl; charset=utf-8",
     "Cache-Control": "no-store, no-cache, must-revalidate",
     "Pragma": "no-cache",
-    "Expires": "0",
-    "X-ELIN-Method": fetched.method
+    "Expires": "0"
   });
 
   return res.status(200).send(rewritten);
@@ -2217,7 +2244,7 @@ setInterval(async () => {
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(
-    "Navegador Roku V6.3 + IPTV Universal V12 iniciado na porta " +
+    "Navegador Roku V6.3 + IPTV Universal V13 Stable iniciado na porta " +
     PORT
   );
 
