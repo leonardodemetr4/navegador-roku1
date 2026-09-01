@@ -1566,7 +1566,7 @@ function publicBaseFromRequest(req) {
 function streamM3uIncremental(rawUrl, userAgent = "", options = {}, redirects = 0) {
   const idleMs = Number(options.idleMs || 10000);
   const totalMs = Number(options.totalMs || 45000);
-  const maxItems = Number(options.maxItems || 5000);
+  const maxItems = Number(options.maxItems || 1200);
 
   return new Promise((resolve, reject) => {
     if (redirects > 5) {
@@ -1831,7 +1831,7 @@ async function fetchPlaylistUniversal(url, code) {
       const result = await streamM3uIncremental(url, attempt[1], {
         idleMs: 10000,
         totalMs: 45000,
-        maxItems: 5000
+        maxItems: 1200
       });
 
       console.log(
@@ -2492,7 +2492,7 @@ setInterval(async () => {
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(
-    "Navegador Roku V6.3 + IPTV Universal V14 Streaming iniciado na porta " +
+    "Navegador Roku V6.3 + IPTV Universal V14.1 Roku Optimized iniciado na porta " +
     PORT
   );
 
