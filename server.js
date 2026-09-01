@@ -1151,7 +1151,7 @@ button.save{width:100%;margin-top:22px;padding:15px;border:0;border-radius:11px;
 <body>
 <div class="wrap">
   <div class="brand">ELIN PLAY</div>
-  <div class="sub">M3U Universal • v14 Streaming</div>
+  <div class="sub">M3U Universal • v15 Roku Fast</div>
 
   <div class="card">
     ${safeMessage ? `<div class="notice">${safeMessage}</div>` : ""}
@@ -1566,7 +1566,7 @@ function publicBaseFromRequest(req) {
 function streamM3uIncremental(rawUrl, userAgent = "", options = {}, redirects = 0) {
   const idleMs = Number(options.idleMs || 10000);
   const totalMs = Number(options.totalMs || 45000);
-  const maxItems = Number(options.maxItems || 1200);
+  const maxItems = Number(options.maxItems || 5000);
 
   return new Promise((resolve, reject) => {
     if (redirects > 5) {
@@ -2090,6 +2090,142 @@ app.get("/iptv/device/:code/diagnostico", async (req, res) => {
 
 
 
+
+function classifyLibraryItem(info, targetUrl) {
+  const value = String(info || "").toLowerCase() + " " + String(targetUrl || "").toLowerCase();
+  if (value.includes("series") || value.includes("serie") || value.includes("episod")) return 2;
+  if (value.includes("movie") || value.includes("filme") || value.includes("vod") || value.includes("cinema")) return 1;
+  if (/\.(mp4|mkv|avi)(\?|$)/i.test(String(targetUrl || ""))) return 1;
+  return 0;
+}
+
+function parseM3uForRokuLibrary(text, code, publicBase, sourceUrl) {
+  const lines = String(text || "").replace(/\r/g, "").split("\n");
+  const buckets = { 0: [], 1: [], 2: [] };
+  let info = "";
+
+  for (const raw of lines) {
+    const line = String(raw || "").trim();
+    if (!line) continue;
+
+    if (line.startsWith("#EXTINF")) {
+      info = line;
+      continue;
+    }
+
+    if (!info || line.startsWith("#")) continue;
+
+    let absolute;
+    try {
+      absolute = new URL(line, sourceUrl).toString();
+    } catch {
+      info = "";
+      continue;
+    }
+
+    const comma = info.indexOf(",");
+    const title = (comma >= 0 ? info.slice(comma + 1) : "Canal").trim() || "Canal";
+    const attr = (name) => {
+      const match = info.match(new RegExp(name + '=\\"([^\\"]*)\\"', 'i'));
+      return match ? match[1] : "";
+    };
+    const kind = classifyLibraryItem(info, absolute);
+    const proxied = makeProxyUrl(publicBase, code, absolute);
+    const lower = absolute.toLowerCase();
+    const format = lower.includes('.m3u8') ? 'hls' : lower.includes('.mpd') ? 'dash' : lower.includes('.mp4') ? 'mp4' : 'hls';
+
+    buckets[kind].push({
+      title: title.slice(0, 180),
+      url: proxied,
+      kind,
+      groupTitle: attr('group-title').slice(0, 120),
+      logo: attr('tvg-logo').slice(0, 500),
+      streamFormat: format
+    });
+    info = "";
+  }
+
+  const selected = [];
+  const quotas = { 0: 360, 1: 300, 2: 240 };
+  for (const kind of [0, 1, 2]) {
+    selected.push(...buckets[kind].slice(0, quotas[kind]));
+  }
+
+  // If a category is sparse, fill remaining slots from the other categories.
+  const maxTotal = 900;
+  if (selected.length < maxTotal) {
+    const used = new Set(selected.map(x => x.url));
+    for (const kind of [0, 1, 2]) {
+      for (const item of buckets[kind]) {
+        if (selected.length >= maxTotal) break;
+        if (!used.has(item.url)) {
+          selected.push(item);
+          used.add(item.url);
+        }
+      }
+      if (selected.length >= maxTotal) break;
+    }
+  }
+
+  return {
+    items: selected,
+    counts: {
+      live: selected.filter(x => x.kind === 0).length,
+      movies: selected.filter(x => x.kind === 1).length,
+      series: selected.filter(x => x.kind === 2).length,
+      total: selected.length
+    },
+    available: {
+      live: buckets[0].length,
+      movies: buckets[1].length,
+      series: buckets[2].length,
+      total: buckets[0].length + buckets[1].length + buckets[2].length
+    }
+  };
+}
+
+app.get("/iptv/device/:code/library.json", async (req, res) => {
+  const code = normalizeDeviceCode(req.params.code);
+  if (!validDeviceCode(code)) return res.status(400).json({ ok: false, error: "Codigo invalido" });
+
+  const cfg = deviceConfigs.get(code);
+  if (!cfg || (!cfg.m3uUrl && !cfg.m3uText)) {
+    return res.status(404).json({ ok: false, error: "Nenhuma M3U cadastrada para este dispositivo" });
+  }
+
+  try {
+    let playlistText = "";
+    let sourceUrl = cfg.m3uUrl || "";
+
+    if (cfg.m3uText) {
+      playlistText = String(cfg.m3uText);
+      sourceUrl = cfg.m3uUrl || "https://local.elin.invalid/list.m3u";
+    } else {
+      const fetched = await fetchPlaylistUniversal(cfg.m3uUrl, code);
+      if (!fetched.ok) throw new Error(fetched.error || "M3U invalida");
+      playlistText = fetched.text;
+    }
+
+    const library = parseM3uForRokuLibrary(
+      playlistText,
+      code,
+      publicBaseFromRequest(req),
+      sourceUrl
+    );
+
+    if (!library.items.length) {
+      return res.status(422).json({ ok: false, error: "Nenhum item reproduzivel encontrado" });
+    }
+
+    console.log("IPTV V15 LIBRARY:", code, "enviando", library.counts.total, "de", library.available.total, "itens");
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate");
+    return res.status(200).json({ ok: true, name: cfg.name || "Minha IPTV", ...library });
+  } catch (error) {
+    console.error("IPTV V15 LIBRARY:", code, error.message);
+    return res.status(502).json({ ok: false, error: "Falha ao preparar biblioteca IPTV" });
+  }
+});
+
 app.get("/iptv/device/:code/proxy.m3u", async (req, res) => {
   const code = normalizeDeviceCode(req.params.code);
 
@@ -2492,7 +2628,7 @@ setInterval(async () => {
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(
-    "Navegador Roku V6.3 + IPTV Universal V14.1 Roku Optimized iniciado na porta " +
+    "Navegador Roku V6.3 + IPTV Universal V15 Roku Fast Library iniciado na porta " +
     PORT
   );
 
