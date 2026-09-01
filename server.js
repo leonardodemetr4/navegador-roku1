@@ -531,6 +531,89 @@ async function fetchIptvCandidate(url, label, userAgent = "") {
   return result.body;
 }
 
+
+function sanitizeDiagnosticPreview(text) {
+  let value = String(text || "")
+    .replace(/\r/g, " ")
+    .replace(/\n/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  value = value
+    .replace(/([?&](?:username|user|password|pass)=)[^&\s"']+/gi, "$1***")
+    .replace(/(https?:\/\/[^\/\s]+\/(?:live|movie|series)\/)[^\/\s]+\/[^\/\s]+/gi, "$1***/***");
+
+  return value.slice(0, 220);
+}
+
+async function probeIptvUrl(url, label, userAgent = "") {
+  const startedAt = Date.now();
+
+  try {
+    const result = await requestText(url, 25000, 0, userAgent);
+    const body = String(result.body || "");
+    const trimmed = body.trim();
+
+    const info = {
+      label,
+      okHttp: result.status >= 200 && result.status < 300,
+      status: result.status,
+      contentType: result.contentType || "",
+      bytes: Buffer.byteLength(body, "utf8"),
+      startsWithExtm3u: trimmed.startsWith("#EXTM3U"),
+      hasExtm3u: body.includes("#EXTM3U"),
+      hasExtinf: body.includes("#EXTINF"),
+      looksLikeHtml: /<html|<!doctype/i.test(body),
+      elapsedMs: Date.now() - startedAt,
+      preview: sanitizeDiagnosticPreview(body)
+    };
+
+    console.log(
+      "IPTV DIAGNOSTICO",
+      label,
+      "HTTP",
+      info.status,
+      "type",
+      info.contentType,
+      "bytes",
+      info.bytes,
+      "extm3u",
+      info.hasExtm3u,
+      "extinf",
+      info.hasExtinf,
+      "html",
+      info.looksLikeHtml,
+      "ms",
+      info.elapsedMs
+    );
+
+    return info;
+  } catch (error) {
+    const info = {
+      label,
+      okHttp: false,
+      status: 0,
+      contentType: "",
+      bytes: 0,
+      startsWithExtm3u: false,
+      hasExtm3u: false,
+      hasExtinf: false,
+      looksLikeHtml: false,
+      elapsedMs: Date.now() - startedAt,
+      error: error.message
+    };
+
+    console.log(
+      "IPTV DIAGNOSTICO",
+      label,
+      "ERRO",
+      error.message
+    );
+
+    return info;
+  }
+}
+
 async function downloadIptv() {
   if (!IPTV_M3U_URL) {
     throw new Error(
@@ -1070,7 +1153,7 @@ button.save{width:100%;margin-top:24px;padding:15px;border:0;border-radius:11px;
 <body>
 <div class="wrap">
   <div class="brand">ELIN PLAY</div>
-  <div class="sub">M3U Direta • v9.3</div>
+  <div class="sub">M3U Direta • v9.4 Diagnostico</div>
 
   <div class="card">
     ${safeMessage ? `<div class="notice">${safeMessage}</div>` : ""}
@@ -1352,6 +1435,58 @@ app.get("/iptv/device/:code/xtream-status", (req, res) => {
       cfg && cfg.m3uUrl
         ? "Este dispositivo usa M3U direta. Xtream/player_api nao e necessario."
         : "Nenhuma M3U cadastrada para este dispositivo."
+  });
+});
+
+
+app.get("/iptv/device/:code/diagnostico", async (req, res) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate");
+
+  const code = normalizeDeviceCode(req.params.code);
+
+  if (!validDeviceCode(code)) {
+    return res.status(400).json({
+      ok: false,
+      error: "Codigo invalido"
+    });
+  }
+
+  const cfg = deviceConfigs.get(code);
+
+  if (!cfg || !cfg.m3uUrl) {
+    return res.status(404).json({
+      ok: false,
+      configured: Boolean(cfg),
+      error: "Nenhuma URL M3U cadastrada para este dispositivo"
+    });
+  }
+
+  const browser = await probeIptvUrl(
+    cfg.m3uUrl,
+    "Browser"
+  );
+
+  const vlc = await probeIptvUrl(
+    cfg.m3uUrl,
+    "VLC",
+    "VLC/3.0.20 LibVLC/3.0.20"
+  );
+
+  const anyM3u =
+    browser.hasExtm3u ||
+    browser.hasExtinf ||
+    vlc.hasExtm3u ||
+    vlc.hasExtinf;
+
+  return res.status(200).json({
+    ok: anyM3u,
+    configured: true,
+    mode: "m3u-direct",
+    code,
+    summary: anyM3u
+      ? "O servidor devolveu conteudo M3U em pelo menos uma tentativa."
+      : "O servidor respondeu, mas nao devolveu uma playlist M3U reconhecivel.",
+    attempts: [browser, vlc]
   });
 });
 
@@ -1676,7 +1811,7 @@ setInterval(async () => {
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(
-    "Navegador Roku V6.3 + IPTV + M3U Direta v9.3 iniciado na porta " +
+    "Navegador Roku V6.3 + IPTV + M3U Direta v9.4 Diagnostico iniciado na porta " +
     PORT
   );
 
