@@ -1439,6 +1439,200 @@ app.get("/iptv/device/:code/xtream-status", (req, res) => {
 });
 
 
+
+function encodeProxyTarget(value) {
+  return Buffer.from(String(value || ""), "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function decodeProxyTarget(value) {
+  try {
+    let raw = String(value || "")
+      .replace(/-/g, "+")
+      .replace(/_/g, "/");
+
+    while (raw.length % 4) raw += "=";
+
+    return Buffer.from(raw, "base64").toString("utf8");
+  } catch {
+    return "";
+  }
+}
+
+function allowedProxyTarget(cfg, targetUrl) {
+  if (!cfg || !cfg.m3uUrl || !targetUrl) return false;
+
+  try {
+    const playlist = new URL(cfg.m3uUrl);
+    const target = new URL(targetUrl);
+
+    if (
+      (target.protocol !== "http:" && target.protocol !== "https:") ||
+      !target.hostname
+    ) {
+      return false;
+    }
+
+    // Restringe o relay ao mesmo host da lista cadastrada.
+    return target.hostname.toLowerCase() === playlist.hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
+function rewriteM3uForProxy(text, code, publicBase) {
+  const lines = String(text || "").replace(/\r/g, "").split("\n");
+  const out = [];
+  let count = 0;
+
+  for (const raw of lines) {
+    const line = raw.trim();
+
+    if (!line) continue;
+
+    if (line.startsWith("#")) {
+      out.push(line);
+      continue;
+    }
+
+    if (/^https?:\/\//i.test(line)) {
+      const token = encodeProxyTarget(line);
+      out.push(
+        publicBase +
+        "/iptv/device/" +
+        encodeURIComponent(code) +
+        "/stream?u=" +
+        encodeURIComponent(token)
+      );
+      count++;
+      continue;
+    }
+
+    out.push(line);
+  }
+
+  if (count === 0) return "";
+
+  console.log("IPTV PROXY playlist reescrita:", code, count, "URLs");
+  return out.join("\n") + "\n";
+}
+
+function relayStreamRequest(req, res, cfg, targetUrl, redirects = 0) {
+  if (redirects > 5) {
+    return res.status(502).type("text/plain").send("Muitos redirecionamentos");
+  }
+
+  if (!allowedProxyTarget(cfg, targetUrl)) {
+    return res.status(403).type("text/plain").send("Destino nao autorizado");
+  }
+
+  let parsed;
+
+  try {
+    parsed = new URL(targetUrl);
+  } catch {
+    return res.status(400).type("text/plain").send("URL de stream invalida");
+  }
+
+  const client = parsed.protocol === "https:" ? https : http;
+
+  const headers = {
+    "User-Agent": "VLC/3.0.20 LibVLC/3.0.20",
+    "Accept": "*/*",
+    "Accept-Encoding": "identity",
+    "Connection": "close"
+  };
+
+  if (req.headers.range) {
+    headers.Range = req.headers.range;
+  }
+
+  const options = {
+    protocol: parsed.protocol,
+    hostname: parsed.hostname,
+    port: parsed.port || undefined,
+    path: parsed.pathname + parsed.search,
+    method: "GET",
+    family: 4,
+    headers,
+    rejectUnauthorized: false
+  };
+
+  const upstream = client.request(options, upstreamRes => {
+    const status = upstreamRes.statusCode || 502;
+
+    if (
+      status >= 300 &&
+      status < 400 &&
+      upstreamRes.headers.location
+    ) {
+      const nextUrl = new URL(
+        upstreamRes.headers.location,
+        targetUrl
+      ).toString();
+
+      upstreamRes.resume();
+
+      return relayStreamRequest(
+        req,
+        res,
+        cfg,
+        nextUrl,
+        redirects + 1
+      );
+    }
+
+    const responseHeaders = {};
+
+    for (const key of [
+      "content-type",
+      "content-length",
+      "content-range",
+      "accept-ranges",
+      "cache-control",
+      "last-modified",
+      "etag"
+    ]) {
+      if (upstreamRes.headers[key] != null) {
+        responseHeaders[key] = upstreamRes.headers[key];
+      }
+    }
+
+    responseHeaders["access-control-allow-origin"] = "*";
+    responseHeaders["connection"] = "close";
+
+    res.writeHead(status, responseHeaders);
+    upstreamRes.pipe(res);
+  });
+
+  upstream.setTimeout(20000, () => {
+    upstream.destroy(new Error("Timeout no stream IPTV"));
+  });
+
+  upstream.on("error", error => {
+    console.error("IPTV STREAM PROXY:", error.message);
+
+    if (!res.headersSent) {
+      res.status(502).type("text/plain").send(
+        "Erro no proxy IPTV: " + error.message
+      );
+    } else {
+      res.destroy();
+    }
+  });
+
+  req.on("close", () => {
+    try {
+      upstream.destroy();
+    } catch {}
+  });
+
+  upstream.end();
+}
+
 app.get("/iptv/device/:code/diagnostico", async (req, res) => {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate");
 
@@ -1488,6 +1682,141 @@ app.get("/iptv/device/:code/diagnostico", async (req, res) => {
       : "O servidor respondeu, mas nao devolveu uma playlist M3U reconhecivel.",
     attempts: [browser, vlc]
   });
+});
+
+
+app.get("/iptv/device/:code/proxy.m3u", async (req, res) => {
+  const code = normalizeDeviceCode(req.params.code);
+
+  if (!validDeviceCode(code)) {
+    return res.status(400).type("text/plain").send("Codigo invalido");
+  }
+
+  const cfg = deviceConfigs.get(code);
+
+  if (!cfg || !cfg.m3uUrl) {
+    return res.status(404).type("text/plain").send(
+      "Nenhuma M3U cadastrada para este dispositivo"
+    );
+  }
+
+  try {
+    let rawText = "";
+    const errors = [];
+
+    for (const attempt of [
+      ["VLC", "VLC/3.0.20 LibVLC/3.0.20"],
+      ["Smarters", "IPTVSmartersPro"],
+      ["Android", "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/131.0 Mobile Safari/537.36"]
+    ]) {
+      try {
+        const result = await requestText(
+          cfg.m3uUrl,
+          30000,
+          0,
+          attempt[1]
+        );
+
+        console.log(
+          "IPTV PROXY M3U",
+          code,
+          attempt[0],
+          "HTTP",
+          result.status,
+          "bytes",
+          result.body.length
+        );
+
+        if (
+          result.status >= 200 &&
+          result.status < 300 &&
+          result.body &&
+          (
+            result.body.includes("#EXTM3U") ||
+            result.body.includes("#EXTINF")
+          )
+        ) {
+          rawText = result.body;
+          break;
+        }
+
+        errors.push(
+          attempt[0] +
+          " HTTP " +
+          result.status +
+          " sem M3U"
+        );
+      } catch (error) {
+        errors.push(attempt[0] + ": " + error.message);
+      }
+    }
+
+    if (!rawText) {
+      return res.status(502).type("text/plain").send(
+        "Erro IPTV proxy: " +
+        (errors.join(" | ") || "servidor nao retornou M3U")
+      );
+    }
+
+    const proto =
+      String(req.headers["x-forwarded-proto"] || req.protocol || "https")
+        .split(",")[0]
+        .trim();
+
+    const host =
+      String(req.headers["x-forwarded-host"] || req.get("host") || "")
+        .split(",")[0]
+        .trim();
+
+    const publicBase = proto + "://" + host;
+    const rewritten = rewriteM3uForProxy(rawText, code, publicBase);
+
+    if (!rewritten) {
+      return res.status(502).type("text/plain").send(
+        "Erro IPTV proxy: M3U sem URLs reproduziveis"
+      );
+    }
+
+    res.set({
+      "Content-Type": "application/vnd.apple.mpegurl; charset=utf-8",
+      "Cache-Control": "no-store, no-cache, must-revalidate",
+      "Pragma": "no-cache",
+      "Expires": "0"
+    });
+
+    return res.status(200).send(rewritten);
+  } catch (error) {
+    console.error("IPTV PROXY M3U:", code, error.message);
+    return res.status(502).type("text/plain").send(
+      "Erro IPTV proxy: " + error.message
+    );
+  }
+});
+
+app.get("/iptv/device/:code/stream", (req, res) => {
+  const code = normalizeDeviceCode(req.params.code);
+
+  if (!validDeviceCode(code)) {
+    return res.status(400).type("text/plain").send("Codigo invalido");
+  }
+
+  const cfg = deviceConfigs.get(code);
+
+  if (!cfg || !cfg.m3uUrl) {
+    return res.status(404).type("text/plain").send(
+      "Dispositivo nao configurado"
+    );
+  }
+
+  const targetUrl = decodeProxyTarget(req.query.u);
+
+  if (!targetUrl) {
+    return res.status(400).type("text/plain").send(
+      "Stream sem destino"
+    );
+  }
+
+  return relayStreamRequest(req, res, cfg, targetUrl);
 });
 
 app.get("/iptv/device/:code/m3u", async (req, res) => {
@@ -1811,7 +2140,7 @@ setInterval(async () => {
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(
-    "Navegador Roku V6.3 + IPTV + M3U Direta v9.4 Diagnostico iniciado na porta " +
+    "Navegador Roku V6.3 + IPTV + Proxy V11 iniciado na porta " +
     PORT
   );
 
