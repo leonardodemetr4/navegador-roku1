@@ -2091,31 +2091,89 @@ app.get("/iptv/device/:code/diagnostico", async (req, res) => {
 
 
 
-function classifyLibraryItem(info, targetUrl) {
-  const meta = String(info || "").toLowerCase();
-  const urlText = String(targetUrl || "").toLowerCase();
-  let pathname = urlText;
+function normalizeCatalogText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
 
+function extractM3uAttr(info, name) {
+  const match = String(info || "").match(new RegExp(name + '="([^"]*)"', "i"));
+  return match ? match[1] : "";
+}
+
+function classifyLibraryItemDetailed(info, targetUrl) {
+  const rawInfo = String(info || "");
+  const urlText = String(targetUrl || "").toLowerCase();
+
+  let pathname = urlText;
   try {
     pathname = new URL(targetUrl).pathname.toLowerCase();
   } catch {}
 
-  // Xtream-style paths are the strongest signal and avoid mixing live TV with VOD.
-  if (/\/(series|series_streams?)\//i.test(pathname)) return 2;
-  if (/\/(movie|movies|vod|vod_streams?)\//i.test(pathname)) return 1;
-  if (/\/(live|live_streams?)\//i.test(pathname)) return 0;
+  const comma = rawInfo.indexOf(",");
+  const titleRaw = comma >= 0 ? rawInfo.slice(comma + 1) : "";
+  const groupRaw = extractM3uAttr(rawInfo, "group-title");
+  const tvgId = extractM3uAttr(rawInfo, "tvg-id");
 
-  const groupMatch = String(info || "").match(/group-title=\"([^\"]*)\"/i);
-  const group = (groupMatch ? groupMatch[1] : "").toLowerCase();
-  const comma = String(info || "").indexOf(",");
-  const title = (comma >= 0 ? String(info || "").slice(comma + 1) : "").toLowerCase();
-  const labels = group + " " + title;
+  const title = normalizeCatalogText(titleRaw);
+  const group = normalizeCatalogText(groupRaw);
+  const labels = (group + " " + title).replace(/\s+/g, " ").trim();
 
-  if (/(^|[ |\-_/])(series|serie|seriados|episodios|episodio|temporada|season|episode)([ |\-_/]|$)/i.test(labels)) return 2;
-  if (/(^|[ |\-_/])(filmes|filme|movies|movie|cinema|vod)([ |\-_/]|$)/i.test(labels)) return 1;
+  // Very strong Xtream-style route hints.
+  if (/\/(series|series_streams?)\//i.test(pathname)) return { kind: 2, confidence: 100 };
+  if (/\/(movie|movies|vod|vod_streams?)\//i.test(pathname)) return { kind: 1, confidence: 100 };
 
-  if (/\.(mp4|mkv|avi|mov|m4v)(\?|$)/i.test(urlText)) return 1;
-  return 0;
+  // Episode naming is stronger than a generic live-looking URL.
+  if (
+    /\bs\d{1,2}\s*e\d{1,3}\b/i.test(titleRaw) ||
+    /\b\d{1,2}x\d{1,3}\b/i.test(titleRaw) ||
+    /\b(?:t|temp|temporada)\s*\d{1,2}\s*(?:e|ep|episodio)\s*\d{1,3}\b/i.test(normalizeCatalogText(titleRaw)) ||
+    /\b(?:episodio|episode|ep)\s*\.?\s*\d{1,3}\b/i.test(normalizeCatalogText(titleRaw))
+  ) {
+    return { kind: 2, confidence: 98 };
+  }
+
+  const seriesWords =
+    /\b(series|serie|seriados|seriado|episodios|episodio|temporadas|temporada|novelas|novela|animes|anime|doramas|dorama)\b/i;
+  const movieWords =
+    /\b(filmes|filme|movies|movie|cinema|vod|lancamentos|lancamento|premieres|premiere)\b/i;
+  const liveWords =
+    /\b(tv\s*ao\s*vivo|ao\s*vivo|canais|canal|abertos|aberto|esportes|esporte|sports|sport|noticias|noticia|news|24h|radio)\b/i;
+
+  if (seriesWords.test(group)) return { kind: 2, confidence: 94 };
+  if (movieWords.test(group)) return { kind: 1, confidence: 94 };
+  if (liveWords.test(group)) return { kind: 0, confidence: 92 };
+
+  // Prefixes commonly used by IPTV catalogs.
+  if (/^(srs|serie|series|seriados)\s*[-|:]/i.test(group)) return { kind: 2, confidence: 94 };
+  if (/^(filme|filmes|movie|movies|vod)\s*[-|:]/i.test(group)) return { kind: 1, confidence: 94 };
+  if (/^(tv|live|canais)\s*[-|:]/i.test(group)) return { kind: 0, confidence: 92 };
+
+  // Strong live route comes after explicit catalog metadata / episode detection.
+  if (/\/(live|live_streams?)\//i.test(pathname)) return { kind: 0, confidence: 90 };
+
+  // File extension: VOD container. Episode-shaped titles remain series.
+  if (/\.(mp4|mkv|avi|mov|m4v)(?:\?|$)/i.test(urlText)) {
+    if (seriesWords.test(labels)) return { kind: 2, confidence: 88 };
+    return { kind: 1, confidence: 82 };
+  }
+
+  // Title-only hints are weaker than group metadata.
+  if (seriesWords.test(title)) return { kind: 2, confidence: 76 };
+  if (movieWords.test(title)) return { kind: 1, confidence: 74 };
+
+  // A populated tvg-id is a useful fallback hint for real live channels.
+  if (String(tvgId || "").trim()) return { kind: 0, confidence: 62 };
+
+  // Unknown for now. Group-majority inference in the second pass decides it.
+  return { kind: -1, confidence: 0 };
+}
+
+function classifyLibraryItem(info, targetUrl) {
+  const result = classifyLibraryItemDetailed(info, targetUrl);
+  return result.kind >= 0 ? result.kind : 0;
 }
 
 function detectRokuStreamFormat(targetUrl) {
@@ -2132,7 +2190,7 @@ function detectRokuStreamFormat(targetUrl) {
 
 function parseM3uForRokuLibrary(text, code, publicBase, sourceUrl) {
   const lines = String(text || "").replace(/\r/g, "").split("\n");
-  const buckets = { 0: [], 1: [], 2: [] };
+  const rawItems = [];
   let info = "";
 
   for (const raw of lines) {
@@ -2156,30 +2214,99 @@ function parseM3uForRokuLibrary(text, code, publicBase, sourceUrl) {
 
     const comma = info.indexOf(",");
     const title = (comma >= 0 ? info.slice(comma + 1) : "Item").trim() || "Item";
-    const attr = (name) => {
-      const match = info.match(new RegExp(name + '=\\"([^\\"]*)\\"', 'i'));
-      return match ? match[1] : "";
-    };
-    const kind = classifyLibraryItem(info, absolute);
-    const proxied = makeProxyUrl(publicBase, code, absolute);
-    const format = detectRokuStreamFormat(absolute);
+    const groupTitle = extractM3uAttr(info, "group-title").slice(0, 120);
+    const detail = classifyLibraryItemDetailed(info, absolute);
 
-    buckets[kind].push({
-      title: title.slice(0, 180),
-      url: proxied,
-      proxyUrl: proxied,
-      directUrl: absolute,
-      kind,
-      groupTitle: attr('group-title').slice(0, 120),
-      logo: attr('tvg-logo').slice(0, 500),
-      streamFormat: format
+    rawItems.push({
+      info,
+      title,
+      groupTitle,
+      absolute,
+      detail
     });
     info = "";
   }
 
-  // Keep the Roku payload compact but balanced between the three real sections.
+  // Build a per-group profile from high-confidence entries. This fixes providers
+  // that use opaque group names and the same .ts extension for TV, movies and series.
+  const groupStats = new Map();
+
+  for (const item of rawItems) {
+    const key = normalizeCatalogText(item.groupTitle).trim();
+    if (!key) continue;
+
+    if (!groupStats.has(key)) {
+      groupStats.set(key, { live: 0, movies: 0, series: 0, total: 0 });
+    }
+
+    const stat = groupStats.get(key);
+    stat.total++;
+
+    if (item.detail.confidence >= 74) {
+      if (item.detail.kind === 0) stat.live += item.detail.confidence;
+      if (item.detail.kind === 1) stat.movies += item.detail.confidence;
+      if (item.detail.kind === 2) stat.series += item.detail.confidence;
+    }
+  }
+
+  const groupKinds = new Map();
+  for (const [key, stat] of groupStats) {
+    const values = [
+      { kind: 0, score: stat.live },
+      { kind: 1, score: stat.movies },
+      { kind: 2, score: stat.series }
+    ].sort((a, b) => b.score - a.score);
+
+    if (values[0].score > 0 && values[0].score >= values[1].score * 1.35) {
+      groupKinds.set(key, values[0].kind);
+    }
+  }
+
+  const buckets = { 0: [], 1: [], 2: [] };
+
+  for (const item of rawItems) {
+    let kind = item.detail.kind;
+    const key = normalizeCatalogText(item.groupTitle).trim();
+
+    // Only override weak/unknown classifications. Never override strong URL/group evidence.
+    if ((kind < 0 || item.detail.confidence < 70) && key && groupKinds.has(key)) {
+      kind = groupKinds.get(key);
+    }
+
+    if (kind < 0) {
+      // Last-resort title heuristics for episodic content.
+      const t = normalizeCatalogText(item.title);
+      if (
+        /\bs\d{1,2}\s*e\d{1,3}\b/i.test(item.title) ||
+        /\b\d{1,2}x\d{1,3}\b/i.test(item.title) ||
+        /\b(?:episodio|episode|ep)\s*\.?\s*\d{1,3}\b/i.test(t)
+      ) {
+        kind = 2;
+      } else {
+        kind = 0;
+      }
+    }
+
+    const proxied = makeProxyUrl(publicBase, code, item.absolute);
+    const format = detectRokuStreamFormat(item.absolute);
+
+    buckets[kind].push({
+      title: item.title.slice(0, 180),
+      url: proxied,
+      proxyUrl: proxied,
+      directUrl: item.absolute,
+      kind,
+      groupTitle: item.groupTitle,
+      logo: extractM3uAttr(item.info, "tvg-logo").slice(0, 500),
+      streamFormat: format
+    });
+  }
+
+  // Balanced payload: each tab receives its own catalog, preventing one huge TV
+  // section from pushing movies/series out of the Roku response.
   const selected = [];
   const quotas = { 0: 300, 1: 300, 2: 300 };
+
   for (const kind of [0, 1, 2]) {
     selected.push(...buckets[kind].slice(0, quotas[kind]));
   }
@@ -2187,7 +2314,7 @@ function parseM3uForRokuLibrary(text, code, publicBase, sourceUrl) {
   const maxTotal = 900;
   if (selected.length < maxTotal) {
     const used = new Set(selected.map(x => x.url));
-    for (const kind of [0, 1, 2]) {
+    for (const kind of [2, 1, 0]) {
       for (const item of buckets[kind]) {
         if (selected.length >= maxTotal) break;
         if (!used.has(item.url)) {
@@ -2198,6 +2325,14 @@ function parseM3uForRokuLibrary(text, code, publicBase, sourceUrl) {
       if (selected.length >= maxTotal) break;
     }
   }
+
+  console.log(
+    "IPTV V15.3 CLASSIFICACAO:",
+    "TV", buckets[0].length,
+    "FILMES", buckets[1].length,
+    "SERIES", buckets[2].length,
+    "GRUPOS", groupKinds.size
+  );
 
   return {
     items: selected,
@@ -2660,7 +2795,7 @@ setInterval(async () => {
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(
-    "Navegador Roku V6.3 + IPTV Universal V15.2 Player + Categorias iniciado na porta " +
+    "Navegador Roku V6.3 + IPTV Universal V15.3 Classificador PRO iniciado na porta " +
     PORT
   );
 
