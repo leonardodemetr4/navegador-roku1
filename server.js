@@ -1831,7 +1831,7 @@ async function fetchPlaylistUniversal(url, code) {
       const result = await streamM3uIncremental(url, attempt[1], {
         idleMs: 10000,
         totalMs: 45000,
-        maxItems: 5000
+        maxItems: 15000
       });
 
       console.log(
@@ -2188,7 +2188,7 @@ function detectRokuStreamFormat(targetUrl) {
   return "";
 }
 
-function parseM3uForRokuLibrary(text, code, publicBase, sourceUrl) {
+function parseM3uForRokuLibrary(text, code, publicBase, sourceUrl, options = {}) {
   const lines = String(text || "").replace(/\r/g, "").split("\n");
   const rawItems = [];
   let info = "";
@@ -2302,32 +2302,83 @@ function parseM3uForRokuLibrary(text, code, publicBase, sourceUrl) {
     });
   }
 
-  // Balanced payload: each tab receives its own catalog, preventing one huge TV
-  // section from pushing movies/series out of the Roku response.
-  const selected = [];
-  const quotas = { 0: 300, 1: 300, 2: 300 };
+  function takeAcrossGroups(sourceItems, limit) {
+    const groups = new Map();
+    const noGroup = [];
 
-  for (const kind of [0, 1, 2]) {
-    selected.push(...buckets[kind].slice(0, quotas[kind]));
-  }
+    for (const item of sourceItems) {
+      const key = normalizeCatalogText(item.groupTitle).trim();
+      if (!key) {
+        noGroup.push(item);
+        continue;
+      }
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(item);
+    }
 
-  const maxTotal = 900;
-  if (selected.length < maxTotal) {
-    const used = new Set(selected.map(x => x.url));
-    for (const kind of [2, 1, 0]) {
-      for (const item of buckets[kind]) {
-        if (selected.length >= maxTotal) break;
-        if (!used.has(item.url)) {
-          selected.push(item);
-          used.add(item.url);
+    const selectedItems = [];
+    const groupArrays = Array.from(groups.values());
+    let index = 0;
+
+    // Round-robin across provider groups. This avoids returning hundreds of
+    // channels from the first group (for example, only Globo affiliates).
+    while (selectedItems.length < limit && groupArrays.length > 0) {
+      let added = false;
+      for (const arr of groupArrays) {
+        if (index < arr.length) {
+          selectedItems.push(arr[index]);
+          added = true;
+          if (selectedItems.length >= limit) break;
         }
       }
-      if (selected.length >= maxTotal) break;
+      if (!added) break;
+      index++;
+    }
+
+    for (const item of noGroup) {
+      if (selectedItems.length >= limit) break;
+      selectedItems.push(item);
+    }
+
+    return selectedItems;
+  }
+
+  const requestedKind =
+    options && Number.isInteger(options.kind) ? options.kind : -1;
+  const requestedLimit =
+    options && Number.isFinite(options.limit)
+      ? Math.max(1, Math.min(900, Number(options.limit)))
+      : 900;
+
+  let selected = [];
+
+  if (requestedKind >= 0 && requestedKind <= 2) {
+    // Category-specific request: dedicate the whole Roku payload to that tab.
+    selected = takeAcrossGroups(buckets[requestedKind], requestedLimit);
+  } else {
+    // Dashboard bootstrap: keep a small balanced sample only for counters/fallback.
+    const perKind = Math.floor(requestedLimit / 3);
+    selected.push(...takeAcrossGroups(buckets[0], perKind));
+    selected.push(...takeAcrossGroups(buckets[1], perKind));
+    selected.push(...takeAcrossGroups(buckets[2], perKind));
+
+    if (selected.length < requestedLimit) {
+      const used = new Set(selected.map(x => x.url));
+      for (const kind of [0, 1, 2]) {
+        for (const item of takeAcrossGroups(buckets[kind], requestedLimit)) {
+          if (selected.length >= requestedLimit) break;
+          if (!used.has(item.url)) {
+            selected.push(item);
+            used.add(item.url);
+          }
+        }
+        if (selected.length >= requestedLimit) break;
+      }
     }
   }
 
   console.log(
-    "IPTV V15.3 CLASSIFICACAO:",
+    "IPTV V15.4 CLASSIFICACAO:",
     "TV", buckets[0].length,
     "FILMES", buckets[1].length,
     "SERIES", buckets[2].length,
@@ -2351,14 +2402,189 @@ function parseM3uForRokuLibrary(text, code, publicBase, sourceUrl) {
   };
 }
 
+
+function parseXtreamV155(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    const username = u.searchParams.get("username");
+    const password = u.searchParams.get("password");
+    if (!username || !password) return null;
+    return {
+      origin: u.protocol + "//" + u.host,
+      username,
+      password
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchJsonV155(rawUrl, timeoutMs = 35000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(rawUrl, {
+      redirect: "follow",
+      headers: {
+        "User-Agent": "VLC/3.0.21 LibVLC/3.0.21",
+        "Accept": "application/json,text/plain,*/*",
+        "Accept-Encoding": "identity",
+        "Connection": "close"
+      },
+      signal: controller.signal
+    });
+
+    const body = await response.text();
+    if (!response.ok) throw new Error("HTTP upstream " + response.status);
+
+    try {
+      return JSON.parse(String(body || "").trim());
+    } catch {
+      throw new Error("Resposta Xtream nao e JSON valido");
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function xtreamPlayableUrlV155(auth, kind, row) {
+  const id = row.stream_id !== undefined ? row.stream_id : "";
+  if (id === "") return "";
+
+  const user = encodeURIComponent(auth.username);
+  const pass = encodeURIComponent(auth.password);
+
+  if (kind === 0) {
+    return auth.origin + "/live/" + user + "/" + pass + "/" + id + ".ts";
+  }
+
+  if (kind === 1) {
+    const ext = String(row.container_extension || "mp4")
+      .replace(/[^A-Za-z0-9]/g, "") || "mp4";
+    return auth.origin + "/movie/" + user + "/" + pass + "/" + id + "." + ext;
+  }
+
+  return "";
+}
+
+async function buildXtreamLibraryV155(rawM3uUrl, code, publicBase, requestedKind, requestedLimit) {
+  const auth = parseXtreamV155(rawM3uUrl);
+  if (!auth) throw new Error("Credenciais Xtream nao detectadas");
+
+  const kind = Number.isInteger(requestedKind) ? requestedKind : -1;
+  const limit = Math.max(1, Math.min(900, Number(requestedLimit) || 900));
+
+  const specs = [];
+  if (kind === 0) specs.push({ kind: 0, action: "get_live_streams" });
+  else if (kind === 1) specs.push({ kind: 1, action: "get_vod_streams" });
+  else if (kind === 2) specs.push({ kind: 2, action: "get_series" });
+  else {
+    specs.push({ kind: 0, action: "get_live_streams" });
+    specs.push({ kind: 1, action: "get_vod_streams" });
+    specs.push({ kind: 2, action: "get_series" });
+  }
+
+  const items = [];
+  const available = { live: 0, movies: 0, series: 0, total: 0 };
+
+  for (const spec of specs) {
+    const endpoint =
+      auth.origin +
+      "/player_api.php?username=" + encodeURIComponent(auth.username) +
+      "&password=" + encodeURIComponent(auth.password) +
+      "&action=" + spec.action;
+
+    const raw = await fetchJsonV155(endpoint, 35000);
+    const rows = Array.isArray(raw) ? raw : [];
+
+    if (spec.kind === 0) available.live = rows.length;
+    if (spec.kind === 1) available.movies = rows.length;
+    if (spec.kind === 2) available.series = rows.length;
+
+    const quota = kind >= 0 ? limit : Math.max(1, Math.floor(limit / 3));
+
+    for (const row of rows.slice(0, quota)) {
+      if (spec.kind === 2) {
+        items.push({
+          title: String(row.name || "Serie").slice(0, 180),
+          url: "",
+          proxyUrl: "",
+          directUrl: "",
+          kind: 2,
+          groupTitle: "Series",
+          logo: String(row.cover || row.stream_icon || "").slice(0, 500),
+          streamFormat: "",
+          seriesId: row.series_id !== undefined ? String(row.series_id) : ""
+        });
+        continue;
+      }
+
+      const direct = xtreamPlayableUrlV155(auth, spec.kind, row);
+      if (!direct) continue;
+
+      const proxied = makeProxyUrl(publicBase, code, direct);
+
+      items.push({
+        title: String(row.name || "Item").slice(0, 180),
+        url: proxied,
+        proxyUrl: proxied,
+        directUrl: direct,
+        kind: spec.kind,
+        groupTitle: "",
+        logo: String(row.stream_icon || row.cover || "").slice(0, 500),
+        streamFormat: detectRokuStreamFormat(direct)
+      });
+    }
+  }
+
+  available.total = available.live + available.movies + available.series;
+
+  console.log(
+    "IPTV V15.5 XTREAM FALLBACK:",
+    code,
+    "TV", available.live,
+    "FILMES", available.movies,
+    "SERIES", available.series,
+    "ENVIADOS", items.length
+  );
+
+  return {
+    items,
+    counts: {
+      live: items.filter(x => x.kind === 0).length,
+      movies: items.filter(x => x.kind === 1).length,
+      series: items.filter(x => x.kind === 2).length,
+      total: items.length
+    },
+    available,
+    sourceMode: "xtream-api"
+  };
+}
+
 app.get("/iptv/device/:code/library.json", async (req, res) => {
   const code = normalizeDeviceCode(req.params.code);
-  if (!validDeviceCode(code)) return res.status(400).json({ ok: false, error: "Codigo invalido" });
+  if (!validDeviceCode(code)) {
+    return res.status(400).json({ ok: false, error: "Codigo invalido" });
+  }
 
   const cfg = deviceConfigs.get(code);
   if (!cfg || (!cfg.m3uUrl && !cfg.m3uText)) {
-    return res.status(404).json({ ok: false, error: "Nenhuma M3U cadastrada para este dispositivo" });
+    return res.status(404).json({
+      ok: false,
+      error: "Nenhuma M3U cadastrada para este dispositivo"
+    });
   }
+
+  const requestedKind =
+    req.query.kind !== undefined && req.query.kind !== ""
+      ? Number(req.query.kind)
+      : -1;
+
+  const requestedLimit =
+    req.query.limit !== undefined && req.query.limit !== ""
+      ? Number(req.query.limit)
+      : 900;
 
   try {
     let playlistText = "";
@@ -2369,7 +2595,11 @@ app.get("/iptv/device/:code/library.json", async (req, res) => {
       sourceUrl = cfg.m3uUrl || "https://local.elin.invalid/list.m3u";
     } else {
       const fetched = await fetchPlaylistUniversal(cfg.m3uUrl, code);
-      if (!fetched.ok) throw new Error(fetched.error || "M3U invalida");
+
+      if (!fetched.ok) {
+        throw new Error(fetched.error || "M3U invalida");
+      }
+
       playlistText = fetched.text;
     }
 
@@ -2377,19 +2607,70 @@ app.get("/iptv/device/:code/library.json", async (req, res) => {
       playlistText,
       code,
       publicBaseFromRequest(req),
-      sourceUrl
+      sourceUrl,
+      {
+        kind: requestedKind,
+        limit: requestedLimit
+      }
     );
 
     if (!library.items.length) {
-      return res.status(422).json({ ok: false, error: "Nenhum item reproduzivel encontrado" });
+      throw new Error("Nenhum item reproduzivel encontrado na M3U");
     }
 
-    console.log("IPTV V15 LIBRARY:", code, "enviando", library.counts.total, "de", library.available.total, "itens");
+    console.log(
+      "IPTV V15.5 M3U:",
+      code,
+      "enviando",
+      library.counts.total,
+      "de",
+      library.available.total,
+      "itens"
+    );
+
     res.set("Cache-Control", "no-store, no-cache, must-revalidate");
-    return res.status(200).json({ ok: true, name: cfg.name || "Minha IPTV", ...library });
-  } catch (error) {
-    console.error("IPTV V15 LIBRARY:", code, error.message);
-    return res.status(502).json({ ok: false, error: "Falha ao preparar biblioteca IPTV" });
+    return res.status(200).json({
+      ok: true,
+      name: cfg.name || "Minha IPTV",
+      mode: "m3u",
+      ...library
+    });
+  } catch (m3uError) {
+    console.error("IPTV V15.5 M3U falhou:", code, m3uError.message);
+
+    if (cfg.m3uUrl) {
+      try {
+        const xtream = await buildXtreamLibraryV155(
+          cfg.m3uUrl,
+          code,
+          publicBaseFromRequest(req),
+          requestedKind,
+          requestedLimit
+        );
+
+        if (xtream.items.length) {
+          res.set("Cache-Control", "no-store, no-cache, must-revalidate");
+          return res.status(200).json({
+            ok: true,
+            name: cfg.name || "Minha IPTV",
+            mode: "xtream-fallback",
+            ...xtream
+          });
+        }
+      } catch (xtreamError) {
+        console.error(
+          "IPTV V15.5 XTREAM fallback falhou:",
+          code,
+          xtreamError.message
+        );
+      }
+    }
+
+    return res.status(502).json({
+      ok: false,
+      error: "Esta lista nao respondeu em M3U nem no fallback Xtream.",
+      detail: String(m3uError.message || "falha desconhecida")
+    });
   }
 });
 
@@ -2795,7 +3076,7 @@ setInterval(async () => {
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(
-    "Navegador Roku V6.3 + IPTV Universal V15.3 Classificador PRO iniciado na porta " +
+    "Navegador Roku V6.3 + IPTV Universal V15.5 M3U + Xtream Fallback iniciado na porta " +
     PORT
   );
 
