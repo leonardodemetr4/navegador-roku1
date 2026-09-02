@@ -1831,7 +1831,7 @@ async function fetchPlaylistUniversal(url, code) {
       const result = await streamM3uIncremental(url, attempt[1], {
         idleMs: 10000,
         totalMs: 45000,
-        maxItems: 1200
+        maxItems: 5000
       });
 
       console.log(
@@ -2092,11 +2092,42 @@ app.get("/iptv/device/:code/diagnostico", async (req, res) => {
 
 
 function classifyLibraryItem(info, targetUrl) {
-  const value = String(info || "").toLowerCase() + " " + String(targetUrl || "").toLowerCase();
-  if (value.includes("series") || value.includes("serie") || value.includes("episod")) return 2;
-  if (value.includes("movie") || value.includes("filme") || value.includes("vod") || value.includes("cinema")) return 1;
-  if (/\.(mp4|mkv|avi)(\?|$)/i.test(String(targetUrl || ""))) return 1;
+  const meta = String(info || "").toLowerCase();
+  const urlText = String(targetUrl || "").toLowerCase();
+  let pathname = urlText;
+
+  try {
+    pathname = new URL(targetUrl).pathname.toLowerCase();
+  } catch {}
+
+  // Xtream-style paths are the strongest signal and avoid mixing live TV with VOD.
+  if (/\/(series|series_streams?)\//i.test(pathname)) return 2;
+  if (/\/(movie|movies|vod|vod_streams?)\//i.test(pathname)) return 1;
+  if (/\/(live|live_streams?)\//i.test(pathname)) return 0;
+
+  const groupMatch = String(info || "").match(/group-title=\"([^\"]*)\"/i);
+  const group = (groupMatch ? groupMatch[1] : "").toLowerCase();
+  const comma = String(info || "").indexOf(",");
+  const title = (comma >= 0 ? String(info || "").slice(comma + 1) : "").toLowerCase();
+  const labels = group + " " + title;
+
+  if (/(^|[ |\-_/])(series|serie|seriados|episodios|episodio|temporada|season|episode)([ |\-_/]|$)/i.test(labels)) return 2;
+  if (/(^|[ |\-_/])(filmes|filme|movies|movie|cinema|vod)([ |\-_/]|$)/i.test(labels)) return 1;
+
+  if (/\.(mp4|mkv|avi|mov|m4v)(\?|$)/i.test(urlText)) return 1;
   return 0;
+}
+
+function detectRokuStreamFormat(targetUrl) {
+  const value = String(targetUrl || "").toLowerCase();
+  if (/\.m3u8(?:\?|$)/i.test(value)) return "hls";
+  if (/\.mpd(?:\?|$)/i.test(value)) return "dash";
+  if (/\.mp4(?:\?|$)/i.test(value)) return "mp4";
+  if (/\.mkv(?:\?|$)/i.test(value)) return "mkv";
+
+  // Do not label MPEG-TS as HLS. Roku can probe raw .ts streams itself.
+  if (/\.ts(?:\?|$)/i.test(value)) return "";
+  return "";
 }
 
 function parseM3uForRokuLibrary(text, code, publicBase, sourceUrl) {
@@ -2124,19 +2155,20 @@ function parseM3uForRokuLibrary(text, code, publicBase, sourceUrl) {
     }
 
     const comma = info.indexOf(",");
-    const title = (comma >= 0 ? info.slice(comma + 1) : "Canal").trim() || "Canal";
+    const title = (comma >= 0 ? info.slice(comma + 1) : "Item").trim() || "Item";
     const attr = (name) => {
       const match = info.match(new RegExp(name + '=\\"([^\\"]*)\\"', 'i'));
       return match ? match[1] : "";
     };
     const kind = classifyLibraryItem(info, absolute);
     const proxied = makeProxyUrl(publicBase, code, absolute);
-    const lower = absolute.toLowerCase();
-    const format = lower.includes('.m3u8') ? 'hls' : lower.includes('.mpd') ? 'dash' : lower.includes('.mp4') ? 'mp4' : 'hls';
+    const format = detectRokuStreamFormat(absolute);
 
     buckets[kind].push({
       title: title.slice(0, 180),
       url: proxied,
+      proxyUrl: proxied,
+      directUrl: absolute,
       kind,
       groupTitle: attr('group-title').slice(0, 120),
       logo: attr('tvg-logo').slice(0, 500),
@@ -2145,13 +2177,13 @@ function parseM3uForRokuLibrary(text, code, publicBase, sourceUrl) {
     info = "";
   }
 
+  // Keep the Roku payload compact but balanced between the three real sections.
   const selected = [];
-  const quotas = { 0: 360, 1: 300, 2: 240 };
+  const quotas = { 0: 300, 1: 300, 2: 300 };
   for (const kind of [0, 1, 2]) {
     selected.push(...buckets[kind].slice(0, quotas[kind]));
   }
 
-  // If a category is sparse, fill remaining slots from the other categories.
   const maxTotal = 900;
   if (selected.length < maxTotal) {
     const used = new Set(selected.map(x => x.url));
@@ -2628,7 +2660,7 @@ setInterval(async () => {
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(
-    "Navegador Roku V6.3 + IPTV Universal V15 Roku Fast Library iniciado na porta " +
+    "Navegador Roku V6.3 + IPTV Universal V15.2 Player + Categorias iniciado na porta " +
     PORT
   );
 
