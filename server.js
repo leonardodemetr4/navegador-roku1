@@ -2403,7 +2403,48 @@ function parseM3uForRokuLibrary(text, code, publicBase, sourceUrl, options = {})
 }
 
 
-function parseXtreamV155(rawUrl) {
+
+function uniqueStringsV156(values) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function buildSourceCandidatesV156(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    const candidates = [u.toString()];
+
+    // Alguns paineis publicam uma URL http:80 mas o painel real responde em HTTPS,
+    // ou o inverso. Tenta apenas variantes seguras do mesmo host/caminho.
+    const toggled = new URL(u.toString());
+    if (u.protocol === "http:") {
+      toggled.protocol = "https:";
+      if (toggled.port === "80") toggled.port = "";
+      candidates.push(toggled.toString());
+    } else if (u.protocol === "https:") {
+      toggled.protocol = "http:";
+      if (toggled.port === "443") toggled.port = "";
+      candidates.push(toggled.toString());
+    }
+
+    if (u.protocol === "http:" && !u.port) {
+      const explicit80 = new URL(u.toString());
+      explicit80.port = "80";
+      candidates.push(explicit80.toString());
+    }
+
+    if (u.protocol === "https:" && !u.port) {
+      const explicit443 = new URL(u.toString());
+      explicit443.port = "443";
+      candidates.push(explicit443.toString());
+    }
+
+    return uniqueStringsV156(candidates);
+  } catch {
+    return [rawUrl];
+  }
+}
+
+function parseXtreamV156(rawUrl) {
   try {
     const u = new URL(rawUrl);
     const username = u.searchParams.get("username");
@@ -2419,7 +2460,34 @@ function parseXtreamV155(rawUrl) {
   }
 }
 
-async function fetchJsonV155(rawUrl, timeoutMs = 35000) {
+function buildXtreamOriginsV156(rawUrl) {
+  const auth = parseXtreamV156(rawUrl);
+  if (!auth) return [];
+
+  const origins = [auth.origin];
+  try {
+    const base = new URL(auth.origin);
+    const alternate = new URL(auth.origin);
+
+    if (base.protocol === "http:") {
+      alternate.protocol = "https:";
+      if (alternate.port === "80") alternate.port = "";
+      origins.push(alternate.origin);
+    } else {
+      alternate.protocol = "http:";
+      if (alternate.port === "443") alternate.port = "";
+      origins.push(alternate.origin);
+    }
+  } catch {}
+
+  return uniqueStringsV156(origins).map(origin => ({
+    origin,
+    username: auth.username,
+    password: auth.password
+  }));
+}
+
+async function fetchJsonV156(rawUrl, timeoutMs = 35000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -2427,7 +2495,7 @@ async function fetchJsonV155(rawUrl, timeoutMs = 35000) {
     const response = await fetch(rawUrl, {
       redirect: "follow",
       headers: {
-        "User-Agent": "VLC/3.0.21 LibVLC/3.0.21",
+        "User-Agent": "IPTVSmartersPro",
         "Accept": "application/json,text/plain,*/*",
         "Accept-Encoding": "identity",
         "Connection": "close"
@@ -2436,19 +2504,49 @@ async function fetchJsonV155(rawUrl, timeoutMs = 35000) {
     });
 
     const body = await response.text();
-    if (!response.ok) throw new Error("HTTP upstream " + response.status);
+    const contentType = String(response.headers.get("content-type") || "");
+    const preview = sanitizeDiagnosticPreview(body);
+
+    if (!response.ok) {
+      throw new Error("HTTP " + response.status + " type " + contentType + " resposta " + preview);
+    }
 
     try {
       return JSON.parse(String(body || "").trim());
     } catch {
-      throw new Error("Resposta Xtream nao e JSON valido");
+      throw new Error("resposta nao JSON; type " + contentType + "; resposta " + preview);
     }
   } finally {
     clearTimeout(timer);
   }
 }
 
-function xtreamPlayableUrlV155(auth, kind, row) {
+async function fetchPlaylistUniversalV156(url, code) {
+  const sourceCandidates = buildSourceCandidatesV156(url);
+  const allErrors = [];
+
+  for (let i = 0; i < sourceCandidates.length; i++) {
+    const candidate = sourceCandidates[i];
+    const label = i === 0 ? "original" : "alternativa-" + i;
+    const result = await fetchPlaylistUniversal(candidate, code + " " + label);
+
+    if (result.ok) {
+      console.log("IPTV V15.6 M3U rota aceita:", code, label);
+      return { ...result, sourceUrl: candidate, route: label };
+    }
+
+    if (result.error) allErrors.push(label + ": " + result.error);
+  }
+
+  return {
+    ok: false,
+    text: "",
+    method: "",
+    error: allErrors.join(" || ") || "Nenhuma variante M3U respondeu"
+  };
+}
+
+function xtreamPlayableUrlV156(auth, kind, row) {
   const id = row.stream_id !== undefined ? row.stream_id : "";
   if (id === "") return "";
 
@@ -2468,12 +2566,25 @@ function xtreamPlayableUrlV155(auth, kind, row) {
   return "";
 }
 
-async function buildXtreamLibraryV155(rawM3uUrl, code, publicBase, requestedKind, requestedLimit) {
-  const auth = parseXtreamV155(rawM3uUrl);
-  if (!auth) throw new Error("Credenciais Xtream nao detectadas");
-
+async function buildXtreamLibraryForOriginV156(auth, code, publicBase, requestedKind, requestedLimit) {
   const kind = Number.isInteger(requestedKind) ? requestedKind : -1;
   const limit = Math.max(1, Math.min(900, Number(requestedLimit) || 900));
+
+  // Primeiro valida o painel sem action. Isso distingue credencial/painel válido
+  // de uma página nginx/html genérica.
+  const authEndpoint =
+    auth.origin +
+    "/player_api.php?username=" + encodeURIComponent(auth.username) +
+    "&password=" + encodeURIComponent(auth.password);
+
+  const authInfo = await fetchJsonV156(authEndpoint, 30000);
+  if (!authInfo || typeof authInfo !== "object") {
+    throw new Error("player_api sem objeto de autenticacao");
+  }
+
+  if (authInfo.user_info && String(authInfo.user_info.auth || "1") === "0") {
+    throw new Error("credenciais recusadas pelo painel Xtream");
+  }
 
   const specs = [];
   if (kind === 0) specs.push({ kind: 0, action: "get_live_streams" });
@@ -2495,7 +2606,7 @@ async function buildXtreamLibraryV155(rawM3uUrl, code, publicBase, requestedKind
       "&password=" + encodeURIComponent(auth.password) +
       "&action=" + spec.action;
 
-    const raw = await fetchJsonV155(endpoint, 35000);
+    const raw = await fetchJsonV156(endpoint, 35000);
     const rows = Array.isArray(raw) ? raw : [];
 
     if (spec.kind === 0) available.live = rows.length;
@@ -2520,9 +2631,8 @@ async function buildXtreamLibraryV155(rawM3uUrl, code, publicBase, requestedKind
         continue;
       }
 
-      const direct = xtreamPlayableUrlV155(auth, spec.kind, row);
+      const direct = xtreamPlayableUrlV156(auth, spec.kind, row);
       if (!direct) continue;
-
       const proxied = makeProxyUrl(publicBase, code, direct);
 
       items.push({
@@ -2540,15 +2650,6 @@ async function buildXtreamLibraryV155(rawM3uUrl, code, publicBase, requestedKind
 
   available.total = available.live + available.movies + available.series;
 
-  console.log(
-    "IPTV V15.5 XTREAM FALLBACK:",
-    code,
-    "TV", available.live,
-    "FILMES", available.movies,
-    "SERIES", available.series,
-    "ENVIADOS", items.length
-  );
-
   return {
     items,
     counts: {
@@ -2560,6 +2661,46 @@ async function buildXtreamLibraryV155(rawM3uUrl, code, publicBase, requestedKind
     available,
     sourceMode: "xtream-api"
   };
+}
+
+async function buildXtreamLibraryV156(rawM3uUrl, code, publicBase, requestedKind, requestedLimit) {
+  const origins = buildXtreamOriginsV156(rawM3uUrl);
+  if (!origins.length) throw new Error("Credenciais Xtream nao detectadas");
+
+  const errors = [];
+
+  for (let i = 0; i < origins.length; i++) {
+    const auth = origins[i];
+    const label = i === 0 ? "original" : "protocolo-alternativo";
+
+    try {
+      const library = await buildXtreamLibraryForOriginV156(
+        auth,
+        code,
+        publicBase,
+        requestedKind,
+        requestedLimit
+      );
+
+      console.log(
+        "IPTV V15.6 XTREAM OK:",
+        code,
+        label,
+        "TV", library.available.live,
+        "FILMES", library.available.movies,
+        "SERIES", library.available.series,
+        "ENVIADOS", library.items.length
+      );
+
+      return library;
+    } catch (error) {
+      const safe = sanitizeDiagnosticPreview(error.message);
+      errors.push(label + ": " + safe);
+      console.error("IPTV V15.6 XTREAM tentativa falhou:", code, label, safe);
+    }
+  }
+
+  throw new Error(errors.join(" | ") || "Xtream indisponivel");
 }
 
 app.get("/iptv/device/:code/library.json", async (req, res) => {
@@ -2594,13 +2735,14 @@ app.get("/iptv/device/:code/library.json", async (req, res) => {
       playlistText = String(cfg.m3uText);
       sourceUrl = cfg.m3uUrl || "https://local.elin.invalid/list.m3u";
     } else {
-      const fetched = await fetchPlaylistUniversal(cfg.m3uUrl, code);
+      const fetched = await fetchPlaylistUniversalV156(cfg.m3uUrl, code);
 
       if (!fetched.ok) {
         throw new Error(fetched.error || "M3U invalida");
       }
 
       playlistText = fetched.text;
+      if (fetched.sourceUrl) sourceUrl = fetched.sourceUrl;
     }
 
     const library = parseM3uForRokuLibrary(
@@ -2619,7 +2761,7 @@ app.get("/iptv/device/:code/library.json", async (req, res) => {
     }
 
     console.log(
-      "IPTV V15.5 M3U:",
+      "IPTV V15.6 M3U:",
       code,
       "enviando",
       library.counts.total,
@@ -2636,11 +2778,11 @@ app.get("/iptv/device/:code/library.json", async (req, res) => {
       ...library
     });
   } catch (m3uError) {
-    console.error("IPTV V15.5 M3U falhou:", code, m3uError.message);
+    console.error("IPTV V15.6 M3U falhou:", code, m3uError.message);
 
     if (cfg.m3uUrl) {
       try {
-        const xtream = await buildXtreamLibraryV155(
+        const xtream = await buildXtreamLibraryV156(
           cfg.m3uUrl,
           code,
           publicBaseFromRequest(req),
@@ -2659,7 +2801,7 @@ app.get("/iptv/device/:code/library.json", async (req, res) => {
         }
       } catch (xtreamError) {
         console.error(
-          "IPTV V15.5 XTREAM fallback falhou:",
+          "IPTV V15.6 XTREAM fallback falhou:",
           code,
           xtreamError.message
         );
@@ -2668,7 +2810,7 @@ app.get("/iptv/device/:code/library.json", async (req, res) => {
 
     return res.status(502).json({
       ok: false,
-      error: "Esta lista nao respondeu em M3U nem no fallback Xtream.",
+      error: "A lista nao respondeu pelas rotas M3U nem Xtream testadas pelo servidor.",
       detail: String(m3uError.message || "falha desconhecida")
     });
   }
@@ -2697,7 +2839,7 @@ app.get("/iptv/device/:code/proxy.m3u", async (req, res) => {
     sourceUrl = cfg.m3uUrl || "https://local.elin.invalid/list.m3u";
     console.log("IPTV V14 usando M3U cadastrada em texto:", code);
   } else {
-    const fetched = await fetchPlaylistUniversal(cfg.m3uUrl, code);
+    const fetched = await fetchPlaylistUniversalV156(cfg.m3uUrl, code);
 
     if (!fetched.ok) {
       console.error("IPTV V14 M3U:", code, fetched.error);
@@ -3076,7 +3218,7 @@ setInterval(async () => {
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(
-    "Navegador Roku V6.3 + IPTV Universal V15.5 M3U + Xtream Fallback iniciado na porta " +
+    "Navegador Roku V6.3 + IPTV Universal V15.6 Multi-Rota M3U + Xtream iniciado na porta " +
     PORT
   );
 
