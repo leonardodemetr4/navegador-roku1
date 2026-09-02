@@ -1831,7 +1831,7 @@ async function fetchPlaylistUniversal(url, code) {
       const result = await streamM3uIncremental(url, attempt[1], {
         idleMs: 10000,
         totalMs: 45000,
-        maxItems: 15000
+        maxItems: 40000
       });
 
       console.log(
@@ -2347,14 +2347,21 @@ function parseM3uForRokuLibrary(text, code, publicBase, sourceUrl, options = {})
     options && Number.isInteger(options.kind) ? options.kind : -1;
   const requestedLimit =
     options && Number.isFinite(options.limit)
-      ? Math.max(1, Math.min(900, Number(options.limit)))
-      : 900;
+      ? Math.max(1, Math.min(1000, Number(options.limit)))
+      : 500;
+  const requestedOffset =
+    options && Number.isFinite(options.offset)
+      ? Math.max(0, Number(options.offset))
+      : 0;
 
   let selected = [];
+  let pagingTotal = 0;
 
   if (requestedKind >= 0 && requestedKind <= 2) {
-    // Category-specific request: dedicate the whole Roku payload to that tab.
-    selected = takeAcrossGroups(buckets[requestedKind], requestedLimit);
+    // Full catalog is available, but sent to Roku in pages to avoid memory crashes.
+    const ordered = takeAcrossGroups(buckets[requestedKind], buckets[requestedKind].length);
+    pagingTotal = ordered.length;
+    selected = ordered.slice(requestedOffset, requestedOffset + requestedLimit);
   } else {
     // Dashboard bootstrap: keep a small balanced sample only for counters/fallback.
     const perKind = Math.floor(requestedLimit / 3);
@@ -2377,8 +2384,12 @@ function parseM3uForRokuLibrary(text, code, publicBase, sourceUrl, options = {})
     }
   }
 
+  if (requestedKind < 0 || requestedKind > 2) {
+    pagingTotal = buckets[0].length + buckets[1].length + buckets[2].length;
+  }
+
   console.log(
-    "IPTV V15.4 CLASSIFICACAO:",
+    "IPTV V16 CLASSIFICACAO:",
     "TV", buckets[0].length,
     "FILMES", buckets[1].length,
     "SERIES", buckets[2].length,
@@ -2398,6 +2409,12 @@ function parseM3uForRokuLibrary(text, code, publicBase, sourceUrl, options = {})
       movies: buckets[1].length,
       series: buckets[2].length,
       total: buckets[0].length + buckets[1].length + buckets[2].length
+    },
+    paging: {
+      offset: requestedOffset,
+      limit: requestedLimit,
+      total: pagingTotal,
+      hasMore: requestedOffset + selected.length < pagingTotal
     }
   };
 }
@@ -2566,9 +2583,10 @@ function xtreamPlayableUrlV156(auth, kind, row) {
   return "";
 }
 
-async function buildXtreamLibraryForOriginV156(auth, code, publicBase, requestedKind, requestedLimit) {
+async function buildXtreamLibraryForOriginV156(auth, code, publicBase, requestedKind, requestedLimit, requestedOffset) {
   const kind = Number.isInteger(requestedKind) ? requestedKind : -1;
-  const limit = Math.max(1, Math.min(900, Number(requestedLimit) || 900));
+  const limit = Math.max(1, Math.min(1000, Number(requestedLimit) || 500));
+  const offset = Math.max(0, Number(requestedOffset) || 0);
 
   // Primeiro valida o painel sem action. Isso distingue credencial/painel válido
   // de uma página nginx/html genérica.
@@ -2614,8 +2632,9 @@ async function buildXtreamLibraryForOriginV156(auth, code, publicBase, requested
     if (spec.kind === 2) available.series = rows.length;
 
     const quota = kind >= 0 ? limit : Math.max(1, Math.floor(limit / 3));
+    const pageRows = kind >= 0 ? rows.slice(offset, offset + quota) : rows.slice(0, quota);
 
-    for (const row of rows.slice(0, quota)) {
+    for (const row of pageRows) {
       if (spec.kind === 2) {
         items.push({
           title: String(row.name || "Serie").slice(0, 180),
@@ -2659,11 +2678,17 @@ async function buildXtreamLibraryForOriginV156(auth, code, publicBase, requested
       total: items.length
     },
     available,
+    paging: {
+      offset,
+      limit,
+      total: kind === 0 ? available.live : kind === 1 ? available.movies : kind === 2 ? available.series : available.total,
+      hasMore: kind >= 0 ? offset + items.length < (kind === 0 ? available.live : kind === 1 ? available.movies : available.series) : false
+    },
     sourceMode: "xtream-api"
   };
 }
 
-async function buildXtreamLibraryV156(rawM3uUrl, code, publicBase, requestedKind, requestedLimit) {
+async function buildXtreamLibraryV156(rawM3uUrl, code, publicBase, requestedKind, requestedLimit, requestedOffset) {
   const origins = buildXtreamOriginsV156(rawM3uUrl);
   if (!origins.length) throw new Error("Credenciais Xtream nao detectadas");
 
@@ -2679,7 +2704,8 @@ async function buildXtreamLibraryV156(rawM3uUrl, code, publicBase, requestedKind
         code,
         publicBase,
         requestedKind,
-        requestedLimit
+        requestedLimit,
+        requestedOffset
       );
 
       console.log(
@@ -2725,7 +2751,12 @@ app.get("/iptv/device/:code/library.json", async (req, res) => {
   const requestedLimit =
     req.query.limit !== undefined && req.query.limit !== ""
       ? Number(req.query.limit)
-      : 900;
+      : 500;
+
+  const requestedOffset =
+    req.query.offset !== undefined && req.query.offset !== ""
+      ? Math.max(0, Number(req.query.offset) || 0)
+      : 0;
 
   try {
     let playlistText = "";
@@ -2752,7 +2783,8 @@ app.get("/iptv/device/:code/library.json", async (req, res) => {
       sourceUrl,
       {
         kind: requestedKind,
-        limit: requestedLimit
+        limit: requestedLimit,
+        offset: requestedOffset
       }
     );
 
@@ -2787,7 +2819,8 @@ app.get("/iptv/device/:code/library.json", async (req, res) => {
           code,
           publicBaseFromRequest(req),
           requestedKind,
-          requestedLimit
+          requestedLimit,
+          requestedOffset
         );
 
         if (xtream.items.length) {
@@ -3218,7 +3251,7 @@ setInterval(async () => {
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(
-    "Navegador Roku V6.3 + IPTV Universal V15.6 Multi-Rota M3U + Xtream iniciado na porta " +
+    "Navegador Roku V6.3 + IPTV Universal V16 Catalogo Completo Paginado" +
     PORT
   );
 
