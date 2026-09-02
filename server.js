@@ -413,7 +413,7 @@ function requestText(rawUrl, timeoutMs = 25000, redirects = 0, userAgent = "") {
         "Accept":
           "application/x-mpegURL,application/vnd.apple.mpegurl,text/plain,*/*",
         "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
-        "Connection": "close"
+        "Connection": "keep-alive"
       },
       rejectUnauthorized: false
     };
@@ -1591,7 +1591,7 @@ function streamM3uIncremental(rawUrl, userAgent = "", options = {}, redirects = 
       "Accept": "application/x-mpegURL,application/vnd.apple.mpegurl,text/plain,*/*",
       "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
       "Accept-Encoding": "identity",
-      "Connection": "close"
+      "Connection": "keep-alive"
     };
 
     let settled = false;
@@ -1900,11 +1900,17 @@ function relayUniversalStream(req, res, code, targetUrl, redirects = 0) {
     "User-Agent": "VLC/3.0.20 LibVLC/3.0.20",
     "Accept": "*/*",
     "Accept-Encoding": "identity",
-    "Connection": "close"
+    "Connection": "keep-alive"
   };
 
   if (req.headers.range) {
     headers.Range = req.headers.range;
+  }
+  if (req.headers["if-range"]) {
+    headers["If-Range"] = req.headers["if-range"];
+  }
+  if (req.headers["if-none-match"]) {
+    headers["If-None-Match"] = req.headers["if-none-match"];
   }
 
   const options = {
@@ -2005,14 +2011,15 @@ function relayUniversalStream(req, res, code, targetUrl, redirects = 0) {
     }
 
     responseHeaders["access-control-allow-origin"] = "*";
-    responseHeaders["connection"] = "close";
+    responseHeaders["cache-control"] = responseHeaders["cache-control"] || "no-store";
+    responseHeaders["connection"] = "keep-alive";
 
     res.writeHead(status, responseHeaders);
     upstreamRes.pipe(res);
   });
 
-  upstream.setTimeout(25000, () => {
-    upstream.destroy(new Error("Timeout no stream IPTV"));
+  upstream.setTimeout(60000, () => {
+    upstream.destroy(new Error("Timeout de inatividade no stream IPTV"));
   });
 
   upstream.on("error", error => {
@@ -2515,7 +2522,7 @@ async function fetchJsonV156(rawUrl, timeoutMs = 35000) {
         "User-Agent": "IPTVSmartersPro",
         "Accept": "application/json,text/plain,*/*",
         "Accept-Encoding": "identity",
-        "Connection": "close"
+        "Connection": "keep-alive"
       },
       signal: controller.signal
     });
@@ -3251,7 +3258,7 @@ setInterval(async () => {
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(
-    "Navegador Roku V6.3 + IPTV Universal V16 Catalogo Completo Paginado" +
+    "Navegador Roku V6.3 + IPTV Universal V16.2 Player/Proxy PRO" +
     PORT
   );
 
