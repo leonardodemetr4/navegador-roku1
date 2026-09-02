@@ -692,6 +692,61 @@ async function downloadIptv() {
   return cleaned;
 }
 
+
+function normalizeSearchText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function filterLibrarySearch(library, query, kind, limit) {
+  const q = normalizeSearchText(query);
+  const max = Math.max(1, Math.min(100, Number(limit) || 60));
+  const wantedKind = Number.isInteger(kind) ? kind : -1;
+
+  if (!q) {
+    return {
+      name: library && library.name ? library.name : "Minha IPTV",
+      items: [],
+      count: 0,
+      query: String(query || ""),
+      kind: wantedKind
+    };
+  }
+
+  const source = Array.isArray(library && library.items) ? library.items : [];
+  const results = [];
+
+  for (const item of source) {
+    if (!item) continue;
+    if (wantedKind >= 0 && Number(item.kind) !== wantedKind) continue;
+
+    const hay = normalizeSearchText(
+      [
+        item.title,
+        item.groupTitle,
+        item.category,
+        item.year
+      ].filter(Boolean).join(" ")
+    );
+
+    if (hay.includes(q)) {
+      results.push(item);
+      if (results.length >= max) break;
+    }
+  }
+
+  return {
+    name: library && library.name ? library.name : "Minha IPTV",
+    items: results,
+    count: results.length,
+    query: String(query || ""),
+    kind: wantedKind
+  };
+}
+
 app.get("/", (req, res) => {
   res.send(
     "<h1>Navegador Roku V6.3 + IPTV</h1>" +
@@ -2736,6 +2791,77 @@ async function buildXtreamLibraryV156(rawM3uUrl, code, publicBase, requestedKind
   throw new Error(errors.join(" | ") || "Xtream indisponivel");
 }
 
+
+app.get("/iptv/device/:code/search.json", async (req, res) => {
+  try {
+    const code = String(req.params.code || "").trim();
+    const query = String(req.query.q || "").trim();
+    const requestedKind =
+      req.query.kind !== undefined && req.query.kind !== ""
+        ? Number(req.query.kind)
+        : -1;
+    const requestedLimit =
+      req.query.limit !== undefined && req.query.limit !== ""
+        ? Number(req.query.limit)
+        : 60;
+
+    if (!query) {
+      return res.json({
+        name: "Minha IPTV",
+        items: [],
+        count: 0,
+        query: "",
+        kind: requestedKind
+      });
+    }
+
+    const publicBase = `${req.protocol}://${req.get("host")}`;
+
+    // Use the same configured device source, but request a large page from the full
+    // category so search is not limited to Roku's current 500-item page.
+    const sourceUrl = getDeviceSourceUrl(code);
+    if (!sourceUrl) {
+      return res.status(404).json({ error: "Lista nao configurada." });
+    }
+
+    let library = null;
+
+    try {
+      library = await buildM3uLibraryV156(
+        sourceUrl,
+        code,
+        publicBase,
+        { kind: requestedKind, limit: 40000, offset: 0 }
+      );
+    } catch (m3uErr) {
+      try {
+        library = await buildXtreamLibraryV156(
+          sourceUrl,
+          code,
+          publicBase,
+          requestedKind,
+          40000,
+          0
+        );
+      } catch (xtreamErr) {
+        throw m3uErr;
+      }
+    }
+
+    return res.json(
+      filterLibrarySearch(
+        library,
+        query,
+        Number.isInteger(requestedKind) ? requestedKind : -1,
+        requestedLimit
+      )
+    );
+  } catch (err) {
+    console.error("IPTV SEARCH:", err && err.message ? err.message : err);
+    return res.status(502).json({ error: "Falha ao pesquisar o catalogo." });
+  }
+});
+
 app.get("/iptv/device/:code/library.json", async (req, res) => {
   const code = normalizeDeviceCode(req.params.code);
   if (!validDeviceCode(code)) {
@@ -3258,7 +3384,7 @@ setInterval(async () => {
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(
-    "Navegador Roku V6.3 + IPTV Universal V16.2 Player/Proxy PRO" +
+    "Navegador Roku V6.3 + IPTV Universal V17.5 Busca Global + Player PRO" +
     PORT
   );
 
