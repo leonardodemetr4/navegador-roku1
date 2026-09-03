@@ -2386,7 +2386,7 @@ function parseM3uForRokuLibrary(text, code, publicBase, sourceUrl, options = {})
       directUrl: item.absolute,
       kind,
       groupTitle: item.groupTitle,
-      logo: extractM3uAttr(item.info, "tvg-logo").slice(0, 500),
+      logo: (() => { const l = extractM3uAttr(item.info, "tvg-logo").slice(0, 500); return l ? publicBase + "/iptv/logo?u=" + encodeURIComponent(l) : ""; })(),
       streamFormat: format
     });
   }
@@ -2818,6 +2818,62 @@ async function buildXtreamLibraryV156(rawM3uUrl, code, publicBase, requestedKind
   throw new Error(errors.join(" | ") || "Xtream indisponivel");
 }
 
+
+
+function safeLogoUrl(raw) {
+  const value = normalizeHttpUrl(raw);
+  if (!value) return "";
+  try {
+    const u = new URL(value);
+    const host = String(u.hostname || "").toLowerCase();
+    if (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "::1" ||
+      /^10\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^169\.254\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+    ) return "";
+    return u.toString();
+  } catch {
+    return "";
+  }
+}
+
+app.get("/iptv/logo", async (req, res) => {
+  const target = safeLogoUrl(req.query.u);
+  if (!target) return res.status(400).end();
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+
+  try {
+    const upstream = await fetch(target, {
+      redirect: "follow",
+      headers: {
+        "User-Agent": "Mozilla/5.0 ELIN-PLAY/17.7",
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+      },
+      signal: controller.signal
+    });
+
+    if (!upstream.ok) return res.status(upstream.status).end();
+
+    const type = String(upstream.headers.get("content-type") || "");
+    if (!type.toLowerCase().startsWith("image/")) return res.status(415).end();
+
+    const data = Buffer.from(await upstream.arrayBuffer());
+    res.setHeader("Content-Type", type);
+    res.setHeader("Cache-Control", "public, max-age=21600");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    return res.status(200).send(data);
+  } catch {
+    return res.status(502).end();
+  } finally {
+    clearTimeout(timer);
+  }
+});
 
 app.get("/iptv/device/:code/search.json", async (req, res) => {
   const code = normalizeDeviceCode(req.params.code);
@@ -3448,7 +3504,7 @@ setInterval(async () => {
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(
-    "Navegador Roku V6.3 + IPTV Universal V17.6 Persistencia no Roku + Busca" +
+    "Navegador Roku V6.3 + IPTV Universal V17.7 Busca + Troca Canal + Logos" +
     PORT
   );
 
