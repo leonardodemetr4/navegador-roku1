@@ -929,6 +929,34 @@ function normalizeHttpUrl(value) {
   }
 }
 
+
+function sourceUrlFromRequest(req) {
+  const raw = String(req.get("x-elin-source") || "").trim();
+  return normalizeHttpUrl(raw);
+}
+
+function resolveDeviceConfig(req, code) {
+  const saved = deviceConfigs.get(code);
+  if (saved && (saved.m3uUrl || saved.m3uText)) {
+    return saved;
+  }
+
+  const localSource = sourceUrlFromRequest(req);
+  if (localSource) {
+    return {
+      name: "Minha IPTV",
+      mode: "m3u-url-local",
+      m3uUrl: localSource,
+      m3uText: "",
+      epgUrl: "",
+      updatedAt: null,
+      localFallback: true
+    };
+  }
+
+  return null;
+}
+
 function htmlEscape(value) {
   return String(value || "")
     .replace(/&/g, "&amp;")
@@ -1403,8 +1431,7 @@ app.get("/api/device/:code", (req, res) => {
     });
   }
 
-  const cfg =
-    deviceConfigs.get(code);
+  const cfg = resolveDeviceConfig(req, code);
 
   if (!cfg) {
     return res.json({
@@ -2793,72 +2820,109 @@ async function buildXtreamLibraryV156(rawM3uUrl, code, publicBase, requestedKind
 
 
 app.get("/iptv/device/:code/search.json", async (req, res) => {
+  const code = normalizeDeviceCode(req.params.code);
+  if (!validDeviceCode(code)) {
+    return res.status(400).json({ ok: false, error: "Codigo invalido" });
+  }
+
+  const cfg = resolveDeviceConfig(req, code);
+  if (!cfg || (!cfg.m3uUrl && !cfg.m3uText)) {
+    return res.status(404).json({ ok: false, error: "Lista nao configurada." });
+  }
+
+  const query = String(req.query.q || "").trim();
+  const requestedKind =
+    req.query.kind !== undefined && req.query.kind !== ""
+      ? Number(req.query.kind)
+      : -1;
+  const requestedLimit = Math.max(
+    1,
+    Math.min(100, Number(req.query.limit) || 60)
+  );
+
+  if (!query) {
+    return res.json({
+      ok: true,
+      name: cfg.name || "Minha IPTV",
+      items: [],
+      count: 0,
+      query: "",
+      kind: requestedKind
+    });
+  }
+
   try {
-    const code = String(req.params.code || "").trim();
-    const query = String(req.query.q || "").trim();
-    const requestedKind =
-      req.query.kind !== undefined && req.query.kind !== ""
-        ? Number(req.query.kind)
-        : -1;
-    const requestedLimit =
-      req.query.limit !== undefined && req.query.limit !== ""
-        ? Number(req.query.limit)
-        : 60;
+    let playlistText = "";
+    let sourceUrl = cfg.m3uUrl || "";
 
-    if (!query) {
-      return res.json({
-        name: "Minha IPTV",
-        items: [],
-        count: 0,
-        query: "",
-        kind: requestedKind
-      });
-    }
-
-    const publicBase = `${req.protocol}://${req.get("host")}`;
-
-    // Use the same configured device source, but request a large page from the full
-    // category so search is not limited to Roku's current 500-item page.
-    const sourceUrl = getDeviceSourceUrl(code);
-    if (!sourceUrl) {
-      return res.status(404).json({ error: "Lista nao configurada." });
-    }
-
-    let library = null;
-
-    try {
-      library = await buildM3uLibraryV156(
-        sourceUrl,
-        code,
-        publicBase,
-        { kind: requestedKind, limit: 40000, offset: 0 }
-      );
-    } catch (m3uErr) {
-      try {
-        library = await buildXtreamLibraryV156(
-          sourceUrl,
-          code,
-          publicBase,
-          requestedKind,
-          40000,
-          0
-        );
-      } catch (xtreamErr) {
-        throw m3uErr;
+    if (cfg.m3uText) {
+      playlistText = String(cfg.m3uText);
+      sourceUrl = cfg.m3uUrl || "https://local.elin.invalid/list.m3u";
+    } else {
+      const fetched = await fetchPlaylistUniversalV156(cfg.m3uUrl, code);
+      if (!fetched.ok) {
+        throw new Error(fetched.error || "M3U invalida");
       }
+      playlistText = fetched.text;
+      if (fetched.sourceUrl) sourceUrl = fetched.sourceUrl;
     }
 
-    return res.json(
-      filterLibrarySearch(
-        library,
-        query,
-        Number.isInteger(requestedKind) ? requestedKind : -1,
-        requestedLimit
-      )
-    );
+    const q = normalizeSearchText(query);
+    const results = [];
+    const seen = new Set();
+    let offset = 0;
+    const pageSize = 1000;
+    let total = 0;
+
+    while (results.length < requestedLimit) {
+      const page = parseM3uForRokuLibrary(
+        playlistText,
+        code,
+        publicBaseFromRequest(req),
+        sourceUrl,
+        {
+          kind: requestedKind,
+          limit: pageSize,
+          offset
+        }
+      );
+
+      total = page.paging && Number(page.paging.total)
+        ? Number(page.paging.total)
+        : page.items.length;
+
+      for (const item of page.items || []) {
+        const hay = normalizeSearchText(
+          [item.title, item.groupTitle].filter(Boolean).join(" ")
+        );
+
+        if (hay.includes(q) && !seen.has(item.directUrl || item.url)) {
+          results.push(item);
+          seen.add(item.directUrl || item.url);
+          if (results.length >= requestedLimit) break;
+        }
+      }
+
+      if (!page.paging || page.paging.hasMore !== true) break;
+      offset += pageSize;
+      if (offset >= total) break;
+    }
+
+    return res.json({
+      ok: true,
+      name: cfg.name || "Minha IPTV",
+      items: results,
+      count: results.length,
+      query,
+      kind: requestedKind,
+      searchedTotal: total
+    });
   } catch (err) {
-    console.error("IPTV SEARCH:", err && err.message ? err.message : err);
-    return res.status(502).json({ error: "Falha ao pesquisar o catalogo." });
+    console.error("IPTV SEARCH:", code, err && err.message ? err.message : err);
+    return res.status(502).json({
+      ok: false,
+      error: "Falha ao pesquisar o catalogo."
+    });
   }
 });
 
@@ -2868,7 +2932,7 @@ app.get("/iptv/device/:code/library.json", async (req, res) => {
     return res.status(400).json({ ok: false, error: "Codigo invalido" });
   }
 
-  const cfg = deviceConfigs.get(code);
+  const cfg = resolveDeviceConfig(req, code);
   if (!cfg || (!cfg.m3uUrl && !cfg.m3uText)) {
     return res.status(404).json({
       ok: false,
@@ -2989,7 +3053,7 @@ app.get("/iptv/device/:code/proxy.m3u", async (req, res) => {
     return res.status(400).type("text/plain").send("Codigo invalido");
   }
 
-  const cfg = deviceConfigs.get(code);
+  const cfg = resolveDeviceConfig(req, code);
 
   if (!cfg || (!cfg.m3uUrl && !cfg.m3uText)) {
     return res.status(404).type("text/plain").send(
@@ -3384,7 +3448,7 @@ setInterval(async () => {
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(
-    "Navegador Roku V6.3 + IPTV Universal V17.5 Busca Global + Player PRO" +
+    "Navegador Roku V6.3 + IPTV Universal V17.6 Persistencia no Roku + Busca" +
     PORT
   );
 
